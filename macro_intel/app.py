@@ -1,13 +1,21 @@
 """
-app.py — Macro Intelligence Dashboard
-======================================
-Streamlit application wiring together all modules:
-  data_fetchers → indicators → rules_engine → inference_engine → narrative_generator
+app.py — Macro Intelligence Dashboard (real data only)
+=======================================================
+9-panel Streamlit application.
 
-Run:
-    streamlit run macro_intel/app.py
-    # or from repo root:
-    streamlit run macro_intel/app.py --server.port 8501
+Run: streamlit run macro_intel/app.py
+     # or from macro_intel/: streamlit run app.py
+
+Panels:
+  1. This Week's Signals
+  2. Global Macro Regime
+  3. Geo-Risk (real data only; placeholders labelled)
+  4. Capital Flows & Structural Themes
+  5. EM & Africa Stress Map
+  6. Market-Implied Forward Layer
+  7. Sector Intelligence (Energy, Agriculture, Chemicals, Industrials, Tech, Minerals)
+  8. Sector Dependency Map
+  9. Weekly Narrative
 """
 
 from __future__ import annotations
@@ -25,31 +33,39 @@ import indicators as ind_mod
 import inference_engine as inf_eng
 import narrative_generator as narr
 import rules_engine as rules_eng
+import sector_dependencies as sec_dep
 
-# ── Page config ───────────────────────────────────────────────────────────────
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Macro Intelligence — Africa & EM",
+    page_title="Macro Intelligence — Real Data",
     page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  .insight-alert   { background:#fdf3f2; border-left:4px solid #c0392b; padding:10px 14px; border-radius:6px; margin:6px 0; }
-  .insight-warning { background:#fef9f0; border-left:4px solid #d35400; padding:10px 14px; border-radius:6px; margin:6px 0; }
-  .insight-info    { background:#f0f7fd; border-left:4px solid #2980b9; padding:10px 14px; border-radius:6px; margin:6px 0; }
-  .inference-high   { background:#fdf3f2; border-left:4px solid #c0392b; padding:8px 12px; border-radius:4px; margin:4px 0; }
-  .inference-medium { background:#fef9f0; border-left:4px solid #d35400; padding:8px 12px; border-radius:4px; margin:4px 0; }
-  .inference-low    { background:#f4f4f4; border-left:4px solid #7f8c8d; padding:8px 12px; border-radius:4px; margin:4px 0; }
-  .source-badge { display:inline-block; padding:2px 8px; border-radius:12px; font-size:0.72rem; font-weight:600; margin:2px; }
-  .source-live  { background:#d5f5e3; color:#1a5e2a; }
-  .source-mock  { background:#fdebd0; color:#7d4b0a; }
-  .regime-crisis   { background:#fdf3f2; color:#c0392b; padding:8px 14px; border-radius:6px; font-weight:700; }
-  .regime-stressed { background:#fef9f0; color:#d35400; padding:8px 14px; border-radius:6px; font-weight:700; }
-  .regime-cautious { background:#fefdf0; color:#b7950b; padding:8px 14px; border-radius:6px; font-weight:700; }
-  .regime-benign   { background:#eafaf1; color:#1a5e2a; padding:8px 14px; border-radius:6px; font-weight:700; }
+  .insight-alert   {background:#fdf3f2;border-left:4px solid #c0392b;padding:10px 14px;border-radius:6px;margin:6px 0;}
+  .insight-warning {background:#fef9f0;border-left:4px solid #d35400;padding:10px 14px;border-radius:6px;margin:6px 0;}
+  .insight-info    {background:#f0f7fd;border-left:4px solid #2980b9;padding:10px 14px;border-radius:6px;margin:6px 0;}
+  .inference-high  {background:#fdf3f2;border-left:4px solid #c0392b;padding:8px 12px;border-radius:4px;margin:4px 0;}
+  .inference-medium{background:#fef9f0;border-left:4px solid #d35400;padding:8px 12px;border-radius:4px;margin:4px 0;}
+  .inference-low   {background:#f4f4f4;border-left:4px solid #7f8c8d;padding:8px 12px;border-radius:4px;margin:4px 0;}
+  .source-badge    {display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.72rem;font-weight:600;margin:2px;}
+  .source-live     {background:#d5f5e3;color:#1a5e2a;}
+  .source-failed   {background:#fde8e8;color:#922b21;}
+  .source-ph       {background:#f3e5f5;color:#5b2c6f;}
+  .placeholder-box {background:#f8f0ff;border:1px dashed #8e44ad;border-radius:6px;padding:10px 14px;color:#5b2c6f;font-size:0.88rem;}
+  .regime-crisis  {background:#fdf3f2;color:#c0392b;padding:8px 14px;border-radius:6px;font-weight:700;}
+  .regime-stressed{background:#fef9f0;color:#d35400;padding:8px 14px;border-radius:6px;font-weight:700;}
+  .regime-cautious{background:#fefdf0;color:#b7950b;padding:8px 14px;border-radius:6px;font-weight:700;}
+  .regime-benign  {background:#eafaf1;color:#1a5e2a;padding:8px 14px;border-radius:6px;font-weight:700;}
+  .sector-crisis  {background:#fdf3f2;border-left:4px solid #c0392b;padding:8px;border-radius:4px;}
+  .sector-stress  {background:#fef9f0;border-left:4px solid #d35400;padding:8px;border-radius:4px;}
+  .sector-normal  {background:#eafaf1;border-left:4px solid #27ae60;padding:8px;border-radius:4px;}
+  .sector-nodata  {background:#f4f4f4;border-left:4px solid #7f8c8d;padding:8px;border-radius:4px;}
+  .prop-chain     {background:#fef9f0;border:1px solid #d35400;border-radius:6px;padding:10px;margin:4px 0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -59,14 +75,47 @@ def _nan(v) -> bool:
 
 
 def _source_badge(label: str) -> str:
-    is_mock = "synthetic" in label.lower() or "mock" in label.lower()
-    css = "source-mock" if is_mock else "source-live"
-    return f'<span class="source-badge {css}">{label}</span>'
+    if "PLACEHOLDER" in label:
+        return f'<span class="source-badge source-ph">{label[:40]}</span>'
+    if "FAILED" in label or "NO API KEY" in label:
+        return f'<span class="source-badge source-failed">{label[:50]}</span>'
+    return f'<span class="source-badge source-live">{label}</span>'
 
 
 def _regime_html(regime: str) -> str:
-    emoji = {"crisis": "🔴", "stressed": "🟠", "cautious": "🟡", "benign": "🟢"}.get(regime, "⚪")
+    emoji = {"crisis":"🔴","stressed":"🟠","cautious":"🟡","benign":"🟢"}.get(regime,"⚪")
     return f'<div class="regime-{regime}">{emoji} Macro Regime: <b>{regime.upper()}</b></div>'
+
+
+def _placeholder_box(name: str, reason: str) -> None:
+    st.markdown(
+        f'<div class="placeholder-box">⚫ <b>PLACEHOLDER — {name}</b><br>'
+        f'<small>{reason}</small></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _sector_card(name: str, data: dict) -> None:
+    status = data.get("status","no_data")
+    css = {"crisis":"sector-crisis","stress":"sector-stress",
+           "contraction":"sector-crisis","slowing":"sector-stress",
+           "normal":"sector-normal","comfortable":"sector-normal",
+           "expanding":"sector-normal"}.get(status,"sector-nodata")
+    icon = cfg.SECTOR_ICON.get(name,"📦")
+    headline = data.get("headline","No data")
+    avail = data.get("data_available", False)
+    srcs  = ", ".join(data.get("data_sources",[]))
+    st.markdown(
+        f'<div class="{css}">'
+        f'<b>{icon} {name}</b> — <i>{status.upper()}</i><br>'
+        f'<small>{headline}</small><br>'
+        f'<small style="color:#7f8c8d">Sources: {srcs}</small>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    for ph in data.get("placeholders", []):
+        st.markdown(f'<div class="placeholder-box" style="margin:2px 0;font-size:0.78rem;">⚫ PLACEHOLDER: {ph}</div>',
+                    unsafe_allow_html=True)
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -78,164 +127,168 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.caption("**FRED API Key** (optional)")
-    fred_key_input = st.text_input(
-        "FRED Key", value="", type="password",
-        placeholder="Leave blank to use env/secrets",
-        label_visibility="collapsed",
-    )
-    if fred_key_input:
-        import os
-        os.environ["FRED_API_KEY"] = fred_key_input
+    st.caption("**API Keys** (free — improves data coverage)")
+    fred_key = st.text_input("FRED API Key", value="", type="password",
+                              placeholder="fred.stlouisfed.org (free)",
+                              label_visibility="collapsed")
+    eia_key  = st.text_input("EIA API Key",  value="", type="password",
+                              placeholder="eia.gov/opendata (free)",
+                              label_visibility="collapsed")
+    if fred_key:
+        import os; os.environ["FRED_API_KEY"] = fred_key
+    if eia_key:
+        import os; os.environ["EIA_API_KEY"]  = eia_key
 
     st.divider()
-    show_inference = st.toggle("Forward-Looking Inference", value=True)
-    show_narrative = st.toggle("Weekly Narrative Note",     value=True)
-    show_raw       = st.toggle("Raw Indicator Values",      value=False)
+    show_inference   = st.toggle("Forward-Looking Inference",   value=True)
+    show_narrative   = st.toggle("Weekly Narrative Note",       value=True)
+    show_sector_deps = st.toggle("Sector Dependency Map",       value=True)
+    show_raw         = st.toggle("Raw Indicator Values",        value=False)
 
     st.divider()
-    st.caption("**Africa Focus Countries**")
     africa_focus = st.multiselect(
-        "Countries (ISO3)", options=cfg.WB_AFRICA,
-        default=["NGA", "KEN", "EGY", "GHA", "ZAF"],
-        label_visibility="collapsed",
+        "Africa Focus Countries (ISO3)", options=cfg.WB_AFRICA,
+        default=["NGA","KEN","EGY","GHA","ZAF"], label_visibility="collapsed",
     )
-
     st.divider()
     st.caption(f"As of: {datetime.date.today().strftime('%d %b %Y')}")
-    st.caption("Data: FRED · World Bank · IMF · Yahoo Finance")
+    st.caption("Real data: FRED · EIA · AGSI+ · FAO · World Bank · IMF · OECD · Yahoo Finance")
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# ── Data loading with source tracking ─────────────────────────────────────────
+@st.cache_data(ttl=900,   show_spinner=False)
+def load_market():    return df_mod.get_market_data()
 
-@st.cache_data(ttl=900)
-def load_market():
-    return df_mod.get_market_data()
+@st.cache_data(ttl=3600,  show_spinner=False)
+def load_yields():    return df_mod.get_yields()
 
-@st.cache_data(ttl=3600)
-def load_yields():
-    return df_mod.get_yields()
+@st.cache_data(ttl=3600,  show_spinner=False)
+def load_fred():      return df_mod.get_fred_macro()
 
-@st.cache_data(ttl=3600)
-def load_fred():
-    return df_mod.get_fred_macro()
+@st.cache_data(ttl=3600,  show_spinner=False)
+def load_eia_oil():   return df_mod.get_eia_oil_inventories()
 
-@st.cache_data(ttl=86400)
-def load_gpr():
-    return df_mod.get_gpr()
+@st.cache_data(ttl=3600,  show_spinner=False)
+def load_eia_gas():   return df_mod.get_eia_gas_storage_us()
 
-@st.cache_data(ttl=3600)
-def load_shipping():
-    return df_mod.get_shipping()
+@st.cache_data(ttl=3600,  show_spinner=False)
+def load_eu_gas():    return df_mod.get_eu_gas_storage()
 
-@st.cache_data(ttl=3600)
-def load_em_spreads():
-    return df_mod.get_em_spreads()
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_fao():       return df_mod.get_fao_food_price_index()
 
-@st.cache_data(ttl=86400)
-def load_wb_reserves():
-    return df_mod.get_worldbank_reserves()
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_wb_res():    return df_mod.get_worldbank_reserves()
 
-@st.cache_data(ttl=86400)
-def load_wb_fdi():
-    return df_mod.get_worldbank_fdi()
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_wb_fdi():    return df_mod.get_worldbank_fdi()
 
-@st.cache_data(ttl=86400)
-def load_imf():
-    return df_mod.get_imf_macro()
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_wb_debt():   return df_mod.get_worldbank_ext_debt()
 
-@st.cache_data(ttl=3600)
-def load_sanctions():
-    return df_mod.get_sanctions_intensity()
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_imf():       return df_mod.get_imf_macro()
 
-@st.cache_data(ttl=3600)
-def load_cyber():
-    return df_mod.get_cyber_risk()
+@st.cache_data(ttl=3600,  show_spinner=False)
+def load_oecd():      return df_mod.get_oecd_cli()
 
-@st.cache_data(ttl=86400)
-def load_minerals():
-    return df_mod.get_critical_minerals()
+# Placeholders (always return None)
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_shipping():  return df_mod.get_shipping_rates()
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_embi():      return df_mod.get_embi_spreads()
 
 
-# ── Load all data ─────────────────────────────────────────────────────────────
-with st.spinner("Loading macro data…"):
-    mkt,        mkt_src  = load_market()
-    yields,     yld_src  = load_yields()
-    fred,       fred_src = load_fred()
-    gpr_df,     gpr_src  = load_gpr()
-    ship_df,    ship_src = load_shipping()
-    em_spreads, em_src   = load_em_spreads()
-    fx_res,     fx_src   = load_wb_reserves()
-    fdi_df,     fdi_src  = load_wb_fdi()
-    imf_df,     imf_src  = load_imf()
-    sanctions,  san_src  = load_sanctions()
-    cyber,      cyb_src  = load_cyber()
-    minerals,   min_src  = load_minerals()
+with st.spinner("Loading real-world data…"):
+    mkt,      mkt_src  = load_market()
+    yields,   yld_src  = load_yields()
+    fred,     fred_src = load_fred()
+    oil_inv,  eia_o_src= load_eia_oil()
+    us_gas,   eia_g_src= load_eia_gas()
+    eu_gas,   agsi_src = load_eu_gas()
+    fao_fpi,  fao_src  = load_fao()
+    fx_res,   wb_r_src = load_wb_res()
+    fdi,      wb_f_src = load_wb_fdi()
+    ext_debt, wb_d_src = load_wb_debt()
+    imf_data, imf_src  = load_imf()
+    oecd_cli, oecd_src = load_oecd()
+    _,        ship_src = load_shipping()
+    _,        embi_src = load_embi()
 
+ALL_SOURCES = {
+    "Market": mkt_src, "Yields": yld_src, "FRED": fred_src,
+    "EIA Oil": eia_o_src, "EIA Gas": eia_g_src, "AGSI+": agsi_src,
+    "FAO": fao_src, "WB Reserves": wb_r_src, "WB FDI": wb_f_src,
+    "WB Debt": wb_d_src, "IMF": imf_src, "OECD": oecd_src,
+    "Shipping": ship_src, "EMBI": embi_src,
+}
+
+# Compute
 ind = ind_mod.compute_all(
     mkt=mkt, yields=yields, fred=fred,
-    gpr=gpr_df, ship=ship_df, sanctions=sanctions, cyber=cyber,
-    em_spreads=em_spreads, fx_reserves=fx_res, minerals=minerals,
+    oil_inv=oil_inv, eu_gas=eu_gas, us_gas=us_gas, fao_fpi=fao_fpi,
+    fx_reserves=fx_res, fdi=fdi, ext_debt=ext_debt, oecd_cli=oecd_cli,
 )
-ind.update({
-    "curve_source": yld_src, "vix_source": mkt_src, "dxy_source": mkt_src,
-    "oil_source": mkt_src, "copper_source": mkt_src,
-    "gpr_source": gpr_src, "em_spread_source": em_src, "fx_res_source": fx_src,
-})
 
 rules      = rules_eng.run(ind)
 inferences = inf_eng.run(ind, rules)
-note       = narr.generate(ind, rules, inferences)
+sectors    = sec_dep.assess_sectors(ind)
+propagations = sec_dep.run(ind)
+note       = narr.generate(ind, rules, inferences, propagations, sectors)
+
+last_updated = datetime.datetime.now().strftime("%Y-%m-%d %H:%M UTC")
 
 
-# ── Header ────────────────────────────────────────────────────────────────────
-col_title, col_regime = st.columns([3, 1])
-with col_title:
-    st.title("🌍 Macro Intelligence — Africa & EM")
-    st.caption("Forward-looking macro risk · Global indicators · Africa sovereign analysis")
-with col_regime:
-    st.markdown(_regime_html(ind.get("macro_regime", "benign")), unsafe_allow_html=True)
+# ── Header ─────────────────────────────────────────────────────────────────────
+col_t, col_r = st.columns([3, 1])
+with col_t:
+    st.title("🌍 Macro Intelligence — Real Data Only")
+    st.caption(f"Real APIs · No synthetic data · Placeholders labelled · Updated: {last_updated}")
+with col_r:
+    st.markdown(_regime_html(ind.get("macro_regime","benign")), unsafe_allow_html=True)
     st.caption(
-        f"Financial stress: **{ind.get('financial_stress_score', 0)}/7** · "
-        f"Geo-risk: **{ind.get('geo_stress_score', 0)}/4**"
+        f"Financial stress: **{ind.get('financial_stress_score',0)}/7** · "
+        f"Geo-risk: **{ind.get('geo_stress_score',0)}/4**"
     )
 
-all_sources = {mkt_src, yld_src, fred_src, gpr_src, em_src, fx_src}
-badges_html = " ".join(_source_badge(s) for s in sorted(all_sources) if s)
-st.markdown(f"**Data:** {badges_html}", unsafe_allow_html=True)
+# Source badges
+badges = " ".join(_source_badge(f"{k}: {v}") for k, v in ALL_SOURCES.items())
+st.markdown(f"**Data sources:** {badges}", unsafe_allow_html=True)
 st.divider()
 
 
-# ── Pulse bar (KPIs) ──────────────────────────────────────────────────────────
-def _metric_col(col, label, val, fmt=".1f", suffix=""):
-    v_str = f"{val:{fmt}}{suffix}" if not _nan(val) else "N/A"
-    col.metric(label, v_str)
+# ── Pulse KPIs ─────────────────────────────────────────────────────────────────
+def _kpi(col, label, val, fmt=".1f", suffix=""):
+    v = f"{val:{fmt}}{suffix}" if not _nan(val) else "N/A"
+    col.metric(label, v)
 
-
-kpi = st.columns(8)
-_metric_col(kpi[0], "VIX",       ind.get("vix",          np.nan))
-_metric_col(kpi[1], "DXY",       ind.get("dxy",          np.nan))
-_metric_col(kpi[2], "Curve",     ind.get("curve_slope",  np.nan), fmt="+.0f", suffix=" bps")
-_metric_col(kpi[3], "EMBI",      ind.get("embi",         np.nan), fmt=".0f",  suffix=" bps")
-_metric_col(kpi[4], "HY Spread", ind.get("hy_spread",    np.nan), fmt=".0f",  suffix=" bps")
-oil_chg = ind.get("oil_1m_chg", np.nan)
-cu_chg  = ind.get("copper_1m_chg", np.nan)
-gd_chg  = ind.get("gold_1m_chg", np.nan)
-_metric_col(kpi[5], "Oil 1M",    oil_chg * 100 if not _nan(oil_chg) else np.nan, fmt="+.1f", suffix="%")
-_metric_col(kpi[6], "Copper 1M", cu_chg  * 100 if not _nan(cu_chg)  else np.nan, fmt="+.1f", suffix="%")
-_metric_col(kpi[7], "Gold 1M",   gd_chg  * 100 if not _nan(gd_chg)  else np.nan, fmt="+.1f", suffix="%")
+kpi = st.columns(9)
+_kpi(kpi[0], "VIX",       ind.get("vix",          np.nan))
+_kpi(kpi[1], "DXY",       ind.get("dxy",          np.nan))
+_kpi(kpi[2], "Curve",     ind.get("curve_slope",  np.nan), fmt="+.0f", suffix=" bps")
+_kpi(kpi[3], "Brent",     ind.get("brent",        np.nan), suffix=" $/bbl")
+_kpi(kpi[4], "Copper 1M", ind.get("copper_1m_chg", np.nan) * 100 if not _nan(ind.get("copper_1m_chg")) else np.nan, fmt="+.1f", suffix="%")
+_kpi(kpi[5], "HY Spread", ind.get("hy_spread",    np.nan), fmt=".0f",  suffix=" bps")
+eu_g = ind.get("eu_gas_storage_pct", np.nan)
+_kpi(kpi[6], "EU Gas",    eu_g,                           fmt=".1f",  suffix="% full")
+fao  = ind.get("fao_fpi",  np.nan)
+_kpi(kpi[7], "FAO FPI",   fao,                            fmt=".0f")
+_kpi(kpi[8], "OECD CLI",  ind.get("oecd_cli_oecdall", np.nan), fmt=".1f")
 st.divider()
 
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
+# ── 9 Tabs ─────────────────────────────────────────────────────────────────────
 tabs = st.tabs([
-    "🚨 Signals",
-    "📈 Rates & Curves",
-    "💵 FX & Dollar",
-    "🛢️ Commodities",
-    "🌍 EM & Africa",
-    "🔮 Inference",
-    "📰 Weekly Note",
+    "🚨 1. Signals",
+    "📈 2. Macro Regime",
+    "🌐 3. Geo-Risk",
+    "💰 4. Capital Flows",
+    "🌍 5. EM & Africa",
+    "🔮 6. Market-Implied",
+    "⚡ 7. Sectors",
+    "🔗 8. Sector Dependencies",
+    "📰 9. Weekly Note",
 ])
 
 
@@ -243,12 +296,15 @@ tabs = st.tabs([
 # TAB 1 — SIGNALS
 # ══════════════════════════════════════════════════════════════════════════════
 with tabs[0]:
-    st.subheader("Cross-Asset Signals")
+    st.subheader("This Week's Signals")
+    st.caption("Rules fire only on real data — silent if data unavailable.")
 
-    for r in rules:
-        lvl = r["level"]
-        icon = cfg.LEVEL_ICON.get(lvl, "")
-        with st.container():
+    if not rules:
+        st.info("No rules fired — check data availability.")
+    else:
+        for r in rules:
+            lvl = r["level"]
+            icon = cfg.LEVEL_ICON.get(lvl,"")
             st.markdown(
                 f'<div class="insight-{lvl}">'
                 f'<b>{icon} [{lvl.upper()}] {r["category"]}</b>: {r["headline"]}'
@@ -257,24 +313,18 @@ with tabs[0]:
             )
             with st.expander("Detail & watch items"):
                 st.write(r["detail"])
-                st.markdown("**Watch:**")
-                for w in r.get("watch", []):
-                    st.markdown(f"- {w}")
-
-    if not rules:
-        st.success("No stress signals detected.")
+                st.markdown("**Watch:** " + " · ".join(r.get("watch",[])))
 
     st.divider()
-    col_fs, col_gs = st.columns(2)
-    with col_fs:
-        fin_score = ind.get("financial_stress_score", 0)
+    c1, c2 = st.columns(2)
+    with c1:
         st.markdown("**Financial Stress Score**")
-        st.progress(fin_score / 7, text=f"{fin_score}/7 indicators elevated")
-
-    with col_gs:
-        geo_score = ind.get("geo_stress_score", 0)
-        st.markdown("**Geopolitical Stress Score**")
-        st.progress(geo_score / 4, text=f"{geo_score}/4 indicators elevated")
+        st.progress(ind.get("financial_stress_score",0) / 7,
+                    text=f"{ind.get('financial_stress_score',0)}/7 indicators elevated")
+    with c2:
+        st.markdown("**Geo / Sector Stress Score**")
+        st.progress(ind.get("geo_stress_score",0) / 4,
+                    text=f"{ind.get('geo_stress_score',0)}/4 indicators elevated")
 
     if show_raw:
         st.divider()
@@ -286,352 +336,539 @@ with tabs[0]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — RATES & CURVES
+# TAB 2 — MACRO REGIME
 # ══════════════════════════════════════════════════════════════════════════════
 with tabs[1]:
-    st.subheader("Yield Curve & Rates")
+    st.subheader("Global Macro Regime")
 
+    # Yield curve shape
     if yields is not None and not yields.empty:
-        tenor_map = {"3M": "us3m", "2Y": "us2y", "5Y": "us5y", "10Y": "us10y", "30Y": "us30y"}
+        tenor_map = {"3M":"3M","2Y":"2Y","5Y":"5Y","10Y":"10Y","30Y":"30Y"}
         curve_pts = {
-            label: yields[col].dropna().iloc[-1]
+            label: float(yields[col].dropna().iloc[-1])
             for label, col in tenor_map.items()
             if col in yields.columns and not yields[col].dropna().empty
         }
         if curve_pts:
             slope = ind.get("curve_slope", np.nan)
-            curve_rg = ind.get("curve_regime", "")
-            title_sfx = f" — {curve_rg} ({slope:+.0f} bps)" if not _nan(slope) else ""
-            fig_curve = go.Figure()
-            fig_curve.add_trace(go.Scatter(
+            curve_rg = ind.get("curve_regime","")
+            title = f"US Treasury Yield Curve — {curve_rg.upper()}"
+            if not _nan(slope):
+                title += f" ({slope:+.0f} bps)"
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
                 x=list(curve_pts.keys()), y=list(curve_pts.values()),
                 mode="lines+markers", line=dict(color="#2c3e50", width=3), marker=dict(size=10),
             ))
-            fig_curve.update_layout(title=f"US Treasury Yield Curve{title_sfx}",
-                                    xaxis_title="Tenor", yaxis_title="Yield (%)", height=360)
-            st.plotly_chart(fig_curve, use_container_width=True)
+            fig.update_layout(title=title, xaxis_title="Tenor", yaxis_title="Yield (%)",
+                              height=320, annotations=[dict(text=f"Source: {yld_src}",
+                              showarrow=False, xref="paper", yref="paper", x=1, y=-0.15)])
+            st.plotly_chart(fig, use_container_width=True)
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if "us10y" in yields.columns and "us2y" in yields.columns:
-                fig_ts = go.Figure()
-                fig_ts.add_trace(go.Scatter(x=yields.index, y=yields["us10y"], name="10Y", line=dict(color="#2980b9")))
-                fig_ts.add_trace(go.Scatter(x=yields.index, y=yields["us2y"],  name="2Y",  line=dict(color="#c0392b")))
-                fig_ts.update_layout(title="2Y vs 10Y Yield", yaxis_title="%", height=280)
-                st.plotly_chart(fig_ts, use_container_width=True)
+        c_a, c_b = st.columns(2)
+        with c_a:
+            if "2Y" in yields.columns and "10Y" in yields.columns:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=yields.index, y=yields["10Y"], name="10Y",
+                                         line=dict(color="#2980b9")))
+                fig.add_trace(go.Scatter(x=yields.index, y=yields["2Y"], name="2Y",
+                                         line=dict(color="#c0392b")))
+                fig.update_layout(title=f"2Y vs 10Y — {yld_src}", height=280)
+                st.plotly_chart(fig, use_container_width=True)
+        with c_b:
+            if "2Y" in yields.columns and "10Y" in yields.columns:
+                spread = (yields["10Y"] - yields["2Y"]) * 100
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=spread.index, y=spread,
+                    marker_color=["#c0392b" if v < 0 else "#27ae60" for v in spread]))
+                fig.add_hline(y=0, line_dash="dash", line_color="black")
+                fig.update_layout(title=f"2Y–10Y Spread (bps) — {yld_src}", height=280)
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        _placeholder_box("Yield Curve", yld_src)
 
-        with col_b:
-            if "us10y" in yields.columns and "us2y" in yields.columns:
-                spread = (yields["us10y"] - yields["us2y"]) * 100
-                fig_sp = go.Figure()
-                fig_sp.add_trace(go.Bar(
-                    x=spread.index, y=spread,
-                    marker_color=["#c0392b" if v < 0 else "#27ae60" for v in spread],
-                ))
-                fig_sp.add_hline(y=0, line_dash="dash", line_color="black")
-                fig_sp.update_layout(title="2Y–10Y Spread (bps)", yaxis_title="bps", height=280)
-                st.plotly_chart(fig_sp, use_container_width=True)
-
+    # FRED macro
     st.divider()
-    col_c, col_d = st.columns(2)
-    with col_c:
-        st.markdown("**Key Rate Indicators**")
+    c_c, c_d = st.columns(2)
+    with c_c:
+        st.markdown("**Rate Indicators**")
         tp   = ind.get("term_premium", np.nan)
         be5  = ind.get("breakeven5y", np.nan)
         be55 = ind.get("breakeven5y5y", np.nan)
-        st.metric("Term Premium (10Y proxy)",  f"{tp:.2f}%"  if not _nan(tp)   else "N/A")
-        st.metric("5Y Breakeven Inflation",    f"{be5:.2f}%" if not _nan(be5)  else "N/A")
-        st.metric("5Y5Y Forward Inflation",    f"{be55:.2f}%" if not _nan(be55) else "N/A")
-
-    with col_d:
-        st.markdown("**Vol & Inflation Regime**")
-        move   = ind.get("move_proxy", np.nan)
-        inf_rg = ind.get("inflation_regime", "")
-        vix_ts = ind.get("vix_term_structure", "N/A")
-        st.metric("MOVE Proxy (bond vol)",  f"{move:.0f}" if not _nan(move) else "N/A")
-        st.metric("Inflation Regime",       inf_rg.upper() if inf_rg else "N/A")
-        st.metric("VIX Term Structure",     vix_ts.upper())
+        move = ind.get("move_proxy", np.nan)
+        st.metric("Term Premium (ACM/FRED)", f"{tp:.2f}%" if not _nan(tp) else "N/A — no FRED key")
+        st.metric("5Y Breakeven (FRED)",     f"{be5:.2f}%" if not _nan(be5) else "N/A — no FRED key")
+        st.metric("5Y5Y Forward (FRED)",     f"{be55:.2f}%" if not _nan(be55) else "N/A — no FRED key")
+        st.metric("MOVE proxy (FRED yields)",f"{move:.0f}" if not _nan(move) else "N/A")
+    with c_d:
+        st.markdown("**Regimes**")
+        for label, key in [("Inflation Regime","inflation_regime"),
+                            ("Financial Conditions","fin_cond_regime"),
+                            ("HY Credit Regime","hy_regime"),
+                            ("IP Momentum","indpro_regime"),
+                            ("OECD CLI","oecd_cli_regime"),
+                            ("Corr Regime","correlation_regime")]:
+            v = ind.get(key, "unknown")
+            st.metric(label, v.upper() if v else "N/A")
 
     if fred is not None and "nfci" in fred:
-        st.divider()
         nfci = fred["nfci"].dropna()
-        fig_nfci = go.Figure()
-        fig_nfci.add_trace(go.Bar(
-            x=nfci.index, y=nfci,
-            marker_color=["#c0392b" if v > 0.5 else "#27ae60" for v in nfci],
-        ))
-        fig_nfci.add_hline(y=0, line_dash="dash", line_color="black")
-        fig_nfci.update_layout(title="Chicago Fed NFCI (>0 = tighter conditions)", height=250)
-        st.plotly_chart(fig_nfci, use_container_width=True)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=nfci.index, y=nfci,
+            marker_color=["#c0392b" if v > 0.5 else "#27ae60" for v in nfci]))
+        fig.add_hline(y=0, line_dash="dash", line_color="black")
+        fig.update_layout(title=f"Chicago Fed NFCI (>0 = tighter) — FRED", height=240)
+        st.plotly_chart(fig, use_container_width=True)
+    elif fred is None:
+        _placeholder_box("NFCI", fred_src)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — FX & DOLLAR
+# TAB 3 — GEO-RISK
 # ══════════════════════════════════════════════════════════════════════════════
 with tabs[2]:
-    st.subheader("FX & Dollar Regime")
+    st.subheader("Geo-Risk (Real Data Only)")
+    st.info("Only indicators with real free API sources are shown. "
+            "Placeholders are labelled where no real API exists.")
 
-    dxy_series = mkt.get("dxy") if mkt is not None else None
-    if dxy_series is not None and not dxy_series.empty:
-        fig_dxy = go.Figure()
-        fig_dxy.add_trace(go.Scatter(x=dxy_series.index, y=dxy_series, name="DXY",
-                                     line=dict(color="#2c3e50", width=2)))
-        fig_dxy.add_hline(y=cfg.THRESH["dxy_strong"],      line_dash="dot",
-                          line_color="#d35400", annotation_text="Strong")
-        fig_dxy.add_hline(y=cfg.THRESH["dxy_very_strong"], line_dash="dot",
-                          line_color="#c0392b", annotation_text="Very Strong")
-        fig_dxy.update_layout(title="US Dollar Index (DXY)", yaxis_title="Index", height=300)
-        st.plotly_chart(fig_dxy, use_container_width=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**US Oil Inventories — EIA**")
+        if oil_inv is not None and not oil_inv.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=oil_inv.index, y=oil_inv, name="US Crude Stocks (Mbbls)"))
+            if len(oil_inv) >= 260:
+                avg5y = oil_inv.iloc[-260:].mean()
+                fig.add_hline(y=avg5y, line_dash="dot", line_color="#d35400",
+                              annotation_text="5Y avg")
+            fig.update_layout(title="US Crude Oil Stocks (EIA)", yaxis_title="Thousand bbls",
+                              height=260)
+            st.plotly_chart(fig, use_container_width=True)
+            inv_dev = ind.get("us_oil_inventory_dev", np.nan)
+            st.caption(f"Deviation vs 5Y avg: {inv_dev*100:+.1f}%" if not _nan(inv_dev) else "")
+        else:
+            _placeholder_box("US Oil Inventories", eia_o_src)
 
-    # EM FX table
+    with c2:
+        st.markdown("**EU Gas Storage — AGSI+**")
+        if eu_gas is not None and not eu_gas.empty and "full_pct" in eu_gas.columns:
+            pct = eu_gas["full_pct"].dropna()
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=pct.index, y=pct, name="EU Storage % Full",
+                                     line=dict(color="#2980b9")))
+            fig.add_hline(y=cfg.THRESH["eu_gas_storage_low"],
+                          line_dash="dot", line_color="#d35400", annotation_text="Low")
+            fig.add_hline(y=cfg.THRESH["eu_gas_storage_crisis"],
+                          line_dash="dot", line_color="#c0392b", annotation_text="Crisis")
+            fig.update_layout(title="EU Gas Storage % Full (AGSI+ / GIE)", yaxis_title="%",
+                              height=260)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            _placeholder_box("EU Gas Storage", agsi_src)
+
     st.divider()
-    fx_pairs = {
-        "USD/BRL": "usdbrl", "USD/ZAR": "usdzar", "USD/TRY": "usdtry",
-        "USD/CNH": "usdcnh", "USD/INR": "usdinr", "USD/MXN": "usdmxn",
-    }
-    fx_rows = []
-    for label, key in fx_pairs.items():
-        series = mkt.get(key) if mkt is not None else None
-        if series is not None and len(series) >= 22:
-            last   = series.iloc[-1]
-            chg_1m = last / series.iloc[-22] - 1
-            chg_ytd = last / series.iloc[0] - 1
-            fx_rows.append({
-                "Pair": label, "Latest": f"{last:.2f}",
-                "1M Chg": f"{chg_1m*100:+.1f}%", "YTD Chg": f"{chg_ytd*100:+.1f}%",
-            })
-    if fx_rows:
-        st.markdown("**EM FX Performance**")
-        st.dataframe(pd.DataFrame(fx_rows).set_index("Pair"), use_container_width=True)
+    c3, c4 = st.columns(2)
+    with c3:
+        st.markdown("**US Natural Gas Storage — EIA**")
+        if us_gas is not None and not us_gas.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=us_gas.index, y=us_gas, name="US Gas Storage (Bcf)"))
+            fig.update_layout(title="US Nat Gas Storage (EIA)", yaxis_title="Bcf", height=240)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            _placeholder_box("US Nat Gas Storage", eia_g_src)
 
-    # FX Reserves
+    with c4:
+        st.markdown("**OECD CLI — OECD**")
+        if oecd_cli is not None and not oecd_cli.empty:
+            fig = go.Figure()
+            for col in oecd_cli.columns[:5]:
+                fig.add_trace(go.Scatter(x=oecd_cli.index, y=oecd_cli[col], name=col))
+            fig.add_hline(y=100, line_dash="dash", line_color="black", annotation_text="Trend")
+            fig.update_layout(title="OECD Composite Leading Indicators (OECD SDMX)",
+                              yaxis_title="Index", height=240)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            _placeholder_box("OECD CLI", oecd_src)
+
     st.divider()
-    st.subheader("FX Reserve Coverage (World Bank)")
-    if fx_res is not None and not fx_res.empty:
-        fig_res = go.Figure()
-        for iso in (africa_focus or cfg.WB_AFRICA[:5]):
-            if iso in fx_res.columns:
-                fig_res.add_trace(go.Scatter(
-                    x=fx_res.index, y=fx_res[iso] / 1e9,
-                    mode="lines+markers", name=iso,
-                ))
-        fig_res.update_layout(title="FX Reserves (USD bn)", yaxis_title="USD bn", height=300)
-        st.plotly_chart(fig_res, use_container_width=True)
-    else:
-        st.info("World Bank FX reserve data unavailable.")
-
-    usd_vuln = ind.get("usd_debt_vulnerability", "")
-    if usd_vuln:
-        st.metric("USD Debt Vulnerability (EM broad)", usd_vuln.upper())
+    st.markdown("**Placeholders — Real-time API unavailable**")
+    for key, meta in cfg.PLACEHOLDERS.items():
+        _placeholder_box(meta["name"], meta["reason"] + " | " + meta.get("alt",""))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — COMMODITIES
+# TAB 4 — CAPITAL FLOWS
 # ══════════════════════════════════════════════════════════════════════════════
 with tabs[3]:
-    st.subheader("Commodities & Supply Chains")
+    st.subheader("Capital Flows & Structural Themes")
 
-    comm_map = {
-        "Brent Crude (USD/bbl)":  "brent",
-        "WTI Crude (USD/bbl)":    "wti",
-        "Copper (HG contract)":   "copper",
-        "Gold (USD/oz)":          "gold",
-        "Natural Gas":            "natgas",
-        "Wheat":                  "wheat",
-    }
-    col_charts = st.columns(2)
-    for idx, (label, key) in enumerate(comm_map.items()):
-        series = mkt.get(key) if mkt is not None else None
-        if series is None or series.empty:
-            continue
+    # DXY
+    dxy_s = mkt.get("dxy") if mkt is not None else None
+    if dxy_s is not None and not dxy_s.empty:
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=series.index, y=series, name=label, line=dict(width=2)))
-        fig.update_layout(title=label, height=250, margin=dict(l=10, r=10, t=40, b=10))
-        col_charts[idx % 2].plotly_chart(fig, use_container_width=True)
-
-    st.divider()
-    col_cg, col_ship = st.columns(2)
-    with col_cg:
-        cg_regime = ind.get("copper_gold_regime", "")
-        cg_ratio  = ind.get("copper_gold_ratio", np.nan)
-        st.markdown("**Copper / Gold Ratio** *(growth vs safety)*")
-        st.metric("Cu/Gold Regime", cg_regime.upper() if cg_regime else "N/A")
-        st.metric("Cu/Gold Ratio",  f"{cg_ratio:.2f}" if not _nan(cg_ratio) else "N/A")
-        st.caption("Rising ratio → risk-on. Falling → risk-off / fear.")
-
-    with col_ship:
-        ship_rg = ind.get("shipping_regime", "")
-        st.markdown("**Shipping / Supply Chain**")
-        st.metric("Shipping Regime", ship_rg.upper() if ship_rg else "N/A")
-        if ship_df is not None and not ship_df.empty:
-            fig_ship = go.Figure()
-            # ship_df is a Series
-            vals = ship_df if isinstance(ship_df, pd.Series) else ship_df.iloc[:, 0]
-            fig_ship.add_trace(go.Scatter(x=vals.index, y=vals, name="BDI"))
-            fig_ship.add_hline(y=cfg.THRESH["shipping_stress"], line_dash="dot", line_color="#d35400")
-            fig_ship.add_hline(y=cfg.THRESH["shipping_crisis"], line_dash="dot", line_color="#c0392b")
-            fig_ship.update_layout(title="Baltic Dry Index", height=220)
-            st.plotly_chart(fig_ship, use_container_width=True)
-
-    st.divider()
-    st.subheader("Critical Minerals (Africa)")
-    if minerals is not None and not minerals.empty:
-        st.dataframe(minerals.tail(5), use_container_width=True)
+        fig.add_trace(go.Scatter(x=dxy_s.index, y=dxy_s, name="DXY", line=dict(color="#2c3e50")))
+        fig.add_hline(y=cfg.THRESH["dxy_strong"],      line_dash="dot",
+                      line_color="#d35400", annotation_text="Strong")
+        fig.add_hline(y=cfg.THRESH["dxy_very_strong"], line_dash="dot",
+                      line_color="#c0392b", annotation_text="Very Strong")
+        fig.update_layout(title=f"USD Index (DXY) — {mkt_src}", height=280)
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Critical minerals data unavailable.")
+        _placeholder_box("DXY", mkt_src)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**FDI Inflows by Region — World Bank**")
+        if fdi is not None and not fdi.empty:
+            fig = go.Figure()
+            for col in fdi.columns:
+                fig.add_trace(go.Bar(name=col, x=fdi.index, y=fdi[col]))
+            fig.update_layout(barmode="group", title=f"FDI Net Inflows (USD bn) — {wb_f_src}",
+                              yaxis_title="USD bn", height=280)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            _placeholder_box("FDI Flows", wb_f_src)
+
+    with c2:
+        st.markdown("**External Debt — World Bank**")
+        if ext_debt is not None and not ext_debt.empty:
+            fig = go.Figure()
+            for col in ext_debt.columns[:6]:
+                fig.add_trace(go.Scatter(x=ext_debt.index, y=ext_debt[col] / 1e9,
+                                         name=col, mode="lines+markers"))
+            fig.update_layout(title=f"External Debt Stocks (USD bn) — {wb_d_src}",
+                              height=280)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            _placeholder_box("External Debt", wb_d_src)
+
+    _placeholder_box("Cross-border Banking Flows (BIS)",
+                     "BIS SDMX API requires complex authentication for full LBS data")
+    _placeholder_box("EM Portfolio Flows (IIF)",
+                     "IIF data requires subscription — weekly flows unavailable free")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — EM & AFRICA
 # ══════════════════════════════════════════════════════════════════════════════
 with tabs[4]:
-    st.subheader("Emerging Markets & Africa Sovereign")
+    st.subheader("EM & Africa Stress Map")
 
-    if em_spreads is not None and not em_spreads.empty:
-        fig_em = go.Figure()
-        for col in em_spreads.columns[:6]:
-            fig_em.add_trace(go.Scatter(x=em_spreads.index, y=em_spreads[col], name=col))
-        fig_em.add_hline(y=cfg.THRESH["em_spread_stress"], line_dash="dot",
-                         line_color="#d35400", annotation_text="Stress")
-        fig_em.add_hline(y=cfg.THRESH["em_spread_crisis"], line_dash="dot",
-                         line_color="#c0392b", annotation_text="Crisis")
-        fig_em.update_layout(title="EM Sovereign Spreads (EMBI proxy, bps)",
-                             yaxis_title="bps", height=300)
-        st.plotly_chart(fig_em, use_container_width=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("EM Regime",      ind.get("em_regime","unknown").upper())
+        st.metric("EM Equity 1M",   f"{ind.get('eem_1m_chg',np.nan)*100:+.1f}%"
+                  if not _nan(ind.get("eem_1m_chg")) else "N/A")
+        st.metric("EM FX Stress Avg", f"{ind.get('em_fx_stress_avg',np.nan)*100:+.1f}%"
+                  if not _nan(ind.get("em_fx_stress_avg")) else "N/A")
+        st.metric("USD Vulnerability", ind.get("usd_debt_vulnerability","unknown").upper()
+                  if ind.get("usd_debt_vulnerability") else "N/A")
 
-    col_embi, col_africa = st.columns(2)
-    with col_embi:
-        embi   = ind.get("embi", np.nan)
-        em_rg  = ind.get("em_regime", "")
-        em_wide = ind.get("em_spreads_widening", False)
-        st.metric("EMBI Spread", f"{embi:.0f} bps" if not _nan(embi) else "N/A",
-                  delta="↑ widening" if em_wide else None)
-        st.metric("EM Regime",   em_rg.upper() if em_rg else "N/A")
+    with c2:
+        if ind.get("fx_res_deteriorating"):
+            st.warning(f"⚠️ FX reserve drawdown: **{ind.get('fx_res_worst_country','unknown')}** most exposed (World Bank)")
+        else:
+            st.success("FX reserves: no acute drawdown detected")
+        _placeholder_box("EMBI Sovereign Spreads", embi_src)
 
-    with col_africa:
-        af_sp  = ind.get("africa_spreads", np.nan)
-        fx_det = ind.get("fx_res_deteriorating", False)
-        worst  = ind.get("fx_res_worst_country", "")
-        st.metric("Africa Composite Spread", f"{af_sp:.0f} bps" if not _nan(af_sp) else "N/A")
-        if fx_det:
-            st.warning(f"FX reserve drawdown: {worst or 'Multiple countries'}")
-
+    # EM FX table
     st.divider()
-    st.subheader("IMF Macro Indicators")
-    # imf_df is a dict[str, pd.DataFrame]
-    if imf_df is not None and len(imf_df) > 0:
-        st.caption(f"Source: {imf_src}")
-        for label, df_imf in imf_df.items():
-            if df_imf is not None and not df_imf.empty:
-                st.markdown(f"**{label.replace('_', ' ').title()}**")
-                st.dataframe(df_imf.tail(5), use_container_width=True)
+    st.markdown("**EM FX Performance — Yahoo Finance**")
+    if mkt is not None:
+        fx_pairs = {
+            "USD/BRL":"usdbrl","USD/ZAR":"usdzar","USD/TRY":"usdtry",
+            "USD/CNH":"usdcnh","USD/INR":"usdinr","USD/MXN":"usdmxn",
+        }
+        rows = []
+        for label, key in fx_pairs.items():
+            s = mkt.get(key)
+            if s is not None and len(s) >= 22:
+                last = float(s.iloc[-1])
+                chg_1m = last / float(s.iloc[-22]) - 1
+                rows.append({"Pair":label, "Latest":f"{last:.2f}",
+                             "1M Chg":f"{chg_1m*100:+.1f}%"})
+        if rows:
+            st.dataframe(pd.DataFrame(rows).set_index("Pair"), use_container_width=True)
     else:
-        st.info("IMF DataMapper data unavailable.")
+        _placeholder_box("EM FX", mkt_src)
 
+    # FX Reserves chart
     st.divider()
-    st.subheader("FDI Inflows (World Bank)")
-    if fdi_df is not None and not fdi_df.empty:
-        fig_fdi = go.Figure()
+    st.markdown("**FX Reserves — World Bank**")
+    if fx_res is not None and not fx_res.empty:
+        fig = go.Figure()
         for iso in (africa_focus or cfg.WB_AFRICA[:5]):
-            if iso in fdi_df.columns:
-                fig_fdi.add_trace(go.Bar(name=iso, x=fdi_df.index, y=fdi_df[iso] / 1e9))
-        fig_fdi.update_layout(barmode="group", title="FDI Net Inflows (USD bn)",
-                              yaxis_title="USD bn", height=280)
-        st.plotly_chart(fig_fdi, use_container_width=True)
+            if iso in fx_res.columns:
+                fig.add_trace(go.Scatter(x=fx_res.index, y=fx_res[iso],
+                                         mode="lines+markers", name=iso))
+        fig.update_layout(title=f"FX Reserves (World Bank) — {wb_r_src}",
+                          yaxis_title="USD", height=300)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        _placeholder_box("FX Reserves", wb_r_src)
 
-    st.info(
-        "📌 **Eurobond maturity wall 2025–2027**: Ghana, Kenya, Ethiopia, Egypt each face "
-        "significant Eurobond redemptions. Monitor IMF program status, FX reserve cover, "
-        "and Eurobond yield spreads."
-    )
+    # IMF data
+    st.divider()
+    st.markdown("**IMF Macro Indicators — IMF DataMapper**")
+    if imf_data is not None and len(imf_data) > 0:
+        for label, df_imf in imf_data.items():
+            if df_imf is not None and not df_imf.empty:
+                with st.expander(f"**{label.replace('_',' ').title()}** (IMF)"):
+                    st.dataframe(df_imf.tail(5), use_container_width=True)
+    else:
+        _placeholder_box("IMF Macro Data", imf_src)
 
-    col_san, col_cyb = st.columns(2)
-    with col_san:
-        san_elev = ind.get("sanctions_elevated", False)
-        st.markdown("**Sanctions Regime**")
-        if san_elev:
-            st.warning("Elevated sanctions intensity detected")
-        else:
-            st.success("Sanctions intensity: normal")
-
-    with col_cyb:
-        st.markdown("**Cyber Risk**")
-        if cyber is not None and not cyber.empty:
-            disp = cyber.tail(3).to_frame("Cyber Risk Index") if isinstance(cyber, pd.Series) else cyber.tail(3)
-            st.dataframe(disp, use_container_width=True)
-        else:
-            st.info("Cyber risk data unavailable.")
+    st.info("📌 **Eurobond maturity wall 2025–2027**: Ghana, Kenya, Ethiopia, Egypt each face "
+            "significant Eurobond redemptions. Monitor FX reserve cover and IMF program status.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — INFERENCE
+# TAB 6 — MARKET-IMPLIED
 # ══════════════════════════════════════════════════════════════════════════════
 with tabs[5]:
-    st.subheader("Forward-Looking Inference Engine")
-    st.caption(
-        "Conditional IF–THEN rules: trigger × context → forward statement. "
-        "Sorted by confidence: high → medium → low."
-    )
+    st.subheader("Market-Implied Forward Layer")
+    st.caption(f"Source: {mkt_src} | Breakevens: {fred_src}")
 
-    if not show_inference:
-        st.info("Enable 'Forward-Looking Inference' in the sidebar.")
-    elif not inferences:
-        st.success("No forward-looking risk signals triggered. Regime is broadly stable.")
-    else:
-        for conf_label, conf_key in [
-            ("HIGH CONFIDENCE", "high"),
-            ("MEDIUM CONFIDENCE", "medium"),
-            ("LOW / SPECULATIVE", "low"),
-        ]:
-            group = [i for i in inferences if i.get("confidence") == conf_key]
-            if not group:
-                continue
-            st.markdown(f"#### {conf_label}")
-            for inf in group:
-                with st.container():
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("**VIX & Volatility**")
+        st.metric("VIX",              f"{ind.get('vix',np.nan):.1f}" if not _nan(ind.get("vix")) else "N/A")
+        st.metric("VIX Regime",       ind.get("vix_regime","unknown").upper())
+        st.metric("VIX Term Structure",ind.get("vix_term_structure","unknown").upper())
+        st.metric("MOVE Proxy",       f"{ind.get('move_proxy',np.nan):.0f}" if not _nan(ind.get("move_proxy")) else "N/A")
+        _placeholder_box("ICE MOVE Index", cfg.PLACEHOLDERS["move_index"]["reason"])
+
+    with c2:
+        st.markdown("**Inflation Expectations (FRED)**")
+        be5  = ind.get("breakeven5y",   np.nan)
+        be55 = ind.get("breakeven5y5y", np.nan)
+        tp   = ind.get("term_premium",  np.nan)
+        st.metric("5Y Breakeven",   f"{be5:.2f}%"  if not _nan(be5)  else "N/A — no FRED key")
+        st.metric("5Y5Y Forward",   f"{be55:.2f}%" if not _nan(be55) else "N/A — no FRED key")
+        st.metric("Term Premium",   f"{tp:.2f}%"   if not _nan(tp)   else "N/A — no FRED key")
+        st.metric("Inflation Regime",ind.get("inflation_regime","unknown").upper())
+
+    with c3:
+        st.markdown("**Cross-Asset Signals**")
+        st.metric("Eq-Bond Correlation", f"{ind.get('eq_bond_corr',np.nan):.2f}"
+                  if not _nan(ind.get("eq_bond_corr")) else "N/A")
+        st.metric("Correlation Regime",  ind.get("correlation_regime","unknown").upper())
+        st.metric("Cu/Gold Regime",      ind.get("copper_gold_regime","unknown").upper())
+        st.metric("Systemic Stress",     "YES ⚠️" if ind.get("systemic_stress_signal") else "No")
+
+    # EEM vs EMB chart
+    if mkt is not None:
+        eem = mkt.get("eem")
+        emb = mkt.get("emb")
+        if eem is not None and emb is not None and not eem.empty and not emb.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=eem.index, y=eem/eem.iloc[0]*100,
+                                     name="EEM (EM Equities)", line=dict(color="#c0392b")))
+            fig.add_trace(go.Scatter(x=emb.index, y=emb/emb.iloc[0]*100,
+                                     name="EMB (EM Bonds)", line=dict(color="#2980b9")))
+            fig.update_layout(title=f"EM Equities vs EM Bonds (indexed 100) — {mkt_src}",
+                              height=280)
+            st.plotly_chart(fig, use_container_width=True)
+
+    # Inference panel
+    if show_inference:
+        st.divider()
+        st.subheader("Forward-Looking Inference Engine")
+        st.caption("Only rules backed by real data fire. Silent if data unavailable.")
+        if not inferences:
+            st.success("No forward-looking risk signals triggered.")
+        else:
+            for conf_label, conf_key in [
+                ("HIGH CONFIDENCE","high"),("MEDIUM CONFIDENCE","medium"),("LOW","low")
+            ]:
+                group = [i for i in inferences if i.get("confidence") == conf_key]
+                if not group: continue
+                st.markdown(f"#### {conf_label}")
+                for inf in group:
+                    srcs = ", ".join(inf.get("data_sources",[]))
                     st.markdown(
                         f'<div class="inference-{conf_key}">'
                         f'{inf.get("icon","📌")} <b>{inf.get("category","")}</b> · '
                         f'<i>{inf.get("horizon","")}</i><br>'
                         f'<b>{inf.get("statement","")}</b><br>'
                         f'<small>Trigger: {inf.get("trigger","")} | '
-                        f'Context: {inf.get("context","")}</small>'
+                        f'Context: {inf.get("context","")}</small><br>'
+                        f'<small style="color:#2980b9">Sources: {srcs}</small>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
                     with st.expander("Implication"):
-                        st.write(inf.get("implication", ""))
-            st.divider()
-
-    st.subheader("Cross-Asset Correlation Regime")
-    corr_rg = ind.get("correlation_regime", "")
-    st.metric("Equity–Bond Correlation", corr_rg.upper() if corr_rg else "N/A")
-    st.caption(
-        "Positive correlation (stress regime) = bonds and equities selling off together. "
-        "Historically marks stagflationary or acute stress periods."
-    )
-
-    eem = mkt.get("eem") if mkt is not None else None
-    emb = mkt.get("emb") if mkt is not None else None
-    if eem is not None and emb is not None and not eem.empty and not emb.empty:
-        fig_cross = go.Figure()
-        fig_cross.add_trace(go.Scatter(
-            x=eem.index, y=eem / eem.iloc[0] * 100,
-            name="EEM (EM Equities)", line=dict(color="#c0392b"),
-        ))
-        fig_cross.add_trace(go.Scatter(
-            x=emb.index, y=emb / emb.iloc[0] * 100,
-            name="EMB (EM Bonds)", line=dict(color="#2980b9"),
-        ))
-        fig_cross.update_layout(title="EM Equities vs EM Bonds (indexed to 100)",
-                                yaxis_title="Index", height=280)
-        st.plotly_chart(fig_cross, use_container_width=True)
+                        st.write(inf.get("implication",""))
+                st.divider()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 7 — WEEKLY NOTE
+# TAB 7 — SECTORS
 # ══════════════════════════════════════════════════════════════════════════════
 with tabs[6]:
+    st.subheader("Sector Intelligence Panel")
+    st.caption("Real data where available · Placeholders labelled for unavailable sources")
+
+    # Sector cards
+    cols = st.columns(3)
+    for idx, (name, data) in enumerate(sectors.items()):
+        with cols[idx % 3]:
+            _sector_card(name, data)
+
+    st.divider()
+
+    # Energy charts (real)
+    st.subheader("⚡ Energy — Detailed")
+    c_e1, c_e2 = st.columns(2)
+    with c_e1:
+        brent_s = mkt.get("brent") if mkt is not None else None
+        if brent_s is not None and not brent_s.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=brent_s.index, y=brent_s, name="Brent Crude"))
+            fig.update_layout(title=f"Brent Crude (USD/bbl) — {mkt_src}", height=240)
+            st.plotly_chart(fig, use_container_width=True)
+    with c_e2:
+        natgas_s = mkt.get("natgas") if mkt is not None else None
+        if natgas_s is not None and not natgas_s.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=natgas_s.index, y=natgas_s, name="Henry Hub (NG=F)"))
+            fig.update_layout(title=f"US Nat Gas (Henry Hub) — {mkt_src}", height=240)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            _placeholder_box("EU Electricity Prices", cfg.PLACEHOLDERS["electricity_eu"]["reason"])
+
+    # Agriculture charts (real)
+    st.divider()
+    st.subheader("🌾 Agriculture — Detailed")
+    c_a1, c_a2 = st.columns(2)
+    with c_a1:
+        if fao_fpi is not None and not fao_fpi.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=fao_fpi.index, y=fao_fpi, name="FAO FPI",
+                                     line=dict(color="#27ae60")))
+            fig.add_hline(y=cfg.THRESH["fao_fpi_stress"], line_dash="dot",
+                          line_color="#d35400", annotation_text="Stress")
+            fig.add_hline(y=cfg.THRESH["fao_fpi_crisis"], line_dash="dot",
+                          line_color="#c0392b", annotation_text="Crisis")
+            fig.update_layout(title=f"FAO Food Price Index — {fao_src}",
+                              yaxis_title="Index (2014-16=100)", height=260)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            _placeholder_box("FAO Food Price Index", fao_src)
+
+    with c_a2:
+        wheat_s = mkt.get("wheat") if mkt is not None else None
+        corn_s  = mkt.get("corn")  if mkt is not None else None
+        if wheat_s is not None or corn_s is not None:
+            fig = go.Figure()
+            if wheat_s is not None and not wheat_s.empty:
+                fig.add_trace(go.Scatter(x=wheat_s.index,
+                                         y=wheat_s/float(wheat_s.iloc[0])*100,
+                                         name="Wheat (ZW=F, indexed)"))
+            if corn_s is not None and not corn_s.empty:
+                fig.add_trace(go.Scatter(x=corn_s.index,
+                                         y=corn_s/float(corn_s.iloc[0])*100,
+                                         name="Corn (ZC=F, indexed)"))
+            fig.update_layout(title=f"Wheat & Corn Futures (indexed 100) — {mkt_src}", height=260)
+            st.plotly_chart(fig, use_container_width=True)
+
+    _placeholder_box("Fertilizer Prices (Urea, Ammonia, Potash)",
+                     cfg.PLACEHOLDERS["fertilizer_prices"]["reason"])
+
+    # Chemicals
+    st.divider()
+    st.subheader("🧪 Chemicals — Placeholders")
+    _placeholder_box("Fertilizer Prices", cfg.PLACEHOLDERS["fertilizer_prices"]["reason"])
+    _placeholder_box("Petrochemical feedstock (Naphtha, Ethane)",
+                     "No free real-time REST API. LME and ICIS require subscriptions.")
+
+    # Critical Minerals
+    st.divider()
+    st.subheader("⛏️ Critical Minerals")
+    c_m1, c_m2 = st.columns(2)
+    with c_m1:
+        copper_s = mkt.get("copper") if mkt is not None else None
+        if copper_s is not None and not copper_s.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=copper_s.index, y=copper_s,
+                                     name="Copper (HG=F)", line=dict(color="#d35400")))
+            fig.update_layout(title=f"Copper Futures (HG=F) — {mkt_src}", height=240)
+            st.plotly_chart(fig, use_container_width=True)
+    with c_m2:
+        nickel_s = mkt.get("nickel") if mkt is not None else None
+        if nickel_s is not None and not nickel_s.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=nickel_s.index, y=nickel_s,
+                                     name="Nickel (NI=F)", line=dict(color="#8e44ad")))
+            fig.update_layout(title=f"Nickel Futures (NI=F) — {mkt_src}", height=240)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            _placeholder_box("Nickel", mkt_src)
+    _placeholder_box("Lithium Prices",  cfg.PLACEHOLDERS["lithium_prices"]["reason"])
+    _placeholder_box("Cobalt Prices",   cfg.PLACEHOLDERS["cobalt_prices"]["reason"])
+    _placeholder_box("LME Inventories", cfg.PLACEHOLDERS["lme_inventories"]["reason"])
+
+    # Technology
+    st.divider()
+    st.subheader("💾 Technology — Placeholders")
+    _placeholder_box("Semiconductor Sales (WSTS)", cfg.PLACEHOLDERS["semiconductor"]["reason"])
+    st.caption("No real-time free API exists for semiconductor sales data. "
+               "Sector ETF (XLK) available on yfinance as rough proxy only.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 8 — SECTOR DEPENDENCIES
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[7]:
+    st.subheader("Sector Dependency Map")
+    st.caption("Cross-sector propagation chains — only fire on real indicator data")
+
+    if not show_sector_deps:
+        st.info("Enable 'Sector Dependency Map' in the sidebar.")
+    elif not propagations:
+        st.success("No cross-sector propagation chains triggered. Sector conditions broadly stable.")
+    else:
+        for prop in propagations:
+            strength = prop.get("strength","")
+            icon_str = prop.get("icon","🔗")
+            st.markdown(
+                f'<div class="prop-chain">'
+                f'{icon_str} <b>{prop.get("from_sector","")} → {prop.get("to_sector","")}</b>'
+                f' <span style="color:#7f8c8d;font-size:0.85rem">({strength} linkage)</span><br>'
+                f'<b>{prop.get("headline","")}</b><br>'
+                f'<small>{prop.get("mechanism","")}</small><br>'
+                f'<small><i>Signal: {prop.get("signal","")}</i></small><br>'
+                f'<small style="color:#2980b9">Sources: {", ".join(prop.get("data_sources",[]))}</small>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            with st.expander("Implication"):
+                st.write(prop.get("implication",""))
+
+    # Sector connectivity diagram (text-based)
+    st.divider()
+    st.subheader("Known Sector Linkages")
+    st.markdown("""
+| From Sector | Transmission Channel | To Sector | Data Available? |
+|---|---|---|---|
+| Energy (Gas) | Haber-Bosch feedstock | Chemicals / Fertilizers | ✅ AGSI+ (gas) |
+| Chemicals | Fertilizer supply crunch | Agriculture (yields) | ✅ AGSI+ + FAO |
+| Agriculture | Food CPI in EM (40-60% basket) | EM/Africa Stress | ✅ FAO + yfinance |
+| Energy (Oil) | Transport/diesel cost | Industrials, Agriculture | ✅ yfinance |
+| Critical Minerals (Cu) | EV/grid capex | Electrification timeline | ✅ yfinance |
+| Macro (USD) | Debt service cost | EM/Africa | ✅ yfinance + WB |
+| Industrials (IP) | Base metal demand | Critical Minerals | ✅ FRED |
+| Shipping rates | Supply chain costs | Industrials, Chemicals | ⚫ PLACEHOLDER |
+| Fertilizer prices | Crop input costs | Agriculture | ⚫ PLACEHOLDER |
+| LME inventories | Metal supply signal | Critical Minerals | ⚫ PLACEHOLDER |
+    """)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 9 — WEEKLY NOTE
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[8]:
     st.subheader(f"Weekly Macro Briefing — {note['as_of']}")
 
     if not show_narrative:
@@ -646,12 +883,12 @@ with tabs[6]:
         for sec in note["sections"]:
             with st.expander(f"**{sec['title']}**", expanded=True):
                 st.markdown(sec["body"])
-                for bullet in sec["bullets"]:
-                    st.markdown(f"- {bullet}")
+                for b in sec["bullets"]:
+                    st.markdown(f"- {b}")
 
         st.divider()
         if note.get("data_sources"):
-            st.caption(f"**Data sources:** {' · '.join(note['data_sources'])}")
+            st.caption(f"**Real data sources used:** {' · '.join(sorted(set(note['data_sources'])))}")
         st.caption(note["footer"])
 
         md_text = narr.to_markdown(note)

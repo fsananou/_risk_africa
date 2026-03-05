@@ -1,7 +1,7 @@
 """
 narrative_generator.py — Weekly macro intelligence note.
 
-Produces a structured 1-page briefing from rules_engine + inference_engine outputs.
+Inputs: rules_engine + inference_engine + sector_dependencies outputs.
 Five sections:
   1. What changed this week
   2. What it means for the next 3–6 months
@@ -9,11 +9,7 @@ Five sections:
   4. Where opportunities are emerging
   5. What to watch next
 
-Usage:
-    from narrative_generator import generate
-    note = generate(ind, rules, inferences, as_of=None)
-    # note is a dict with keys: as_of, headline, regime_label,
-    #   sections (list of {title, body, bullets}), footer
+Returns dict + to_markdown() for export.
 """
 
 from __future__ import annotations
@@ -23,473 +19,285 @@ from typing import Optional
 
 import numpy as np
 
-from config import LEVEL_COLOR, LEVEL_ICON
+from config import LEVEL_ICON
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _nan(v) -> bool:
     return v is None or (isinstance(v, float) and np.isnan(float(v)))
 
 
 def _pct(v, dec=1) -> str:
-    if _nan(v):
-        return "N/A"
+    if _nan(v): return "N/A"
     sign = "+" if v >= 0 else ""
     return f"{sign}{v * 100:.{dec}f}%"
 
 
-def _bps(v, dec=0) -> str:
-    if _nan(v):
-        return "N/A"
-    sign = "+" if v >= 0 else ""
-    return f"{sign}{v:.{dec}f} bps"
-
-
-def _fmt(v, dec=1, suffix="") -> str:
-    if _nan(v):
-        return "N/A"
-    return f"{v:.{dec}f}{suffix}"
-
-
-def _alerts(rules: list[dict]) -> list[dict]:
-    return [r for r in rules if r["level"] == "alert"]
-
-
-def _warnings(rules: list[dict]) -> list[dict]:
-    return [r for r in rules if r["level"] == "warning"]
-
-
-def _high_conf(inferences: list[dict]) -> list[dict]:
-    return [i for i in inferences if i.get("confidence") == "high"]
-
-
-def _medium_conf(inferences: list[dict]) -> list[dict]:
-    return [i for i in inferences if i.get("confidence") == "medium"]
-
-
-# ── Regime labels ─────────────────────────────────────────────────────────────
-
+_REGIME_EMOJI = {"crisis": "🔴", "stressed": "🟠", "cautious": "🟡", "benign": "🟢"}
 _REGIME_DESC = {
-    "crisis":   "CRISIS — Multiple simultaneous stress indicators, maximum defensive posture warranted.",
+    "crisis":   "CRISIS — Multiple simultaneous stress indicators. Maximum defensive posture warranted.",
     "stressed": "STRESSED — Elevated cross-asset stress. Risk-reward skewed defensively.",
     "cautious": "CAUTIOUS — Underlying vulnerabilities present; selective risk exposure appropriate.",
     "benign":   "BENIGN — Broadly constructive macro regime; watch for regime change signals.",
-}
-
-_REGIME_EMOJI = {
-    "crisis": "🔴",
-    "stressed": "🟠",
-    "cautious": "🟡",
-    "benign": "🟢",
 }
 
 
 # ── Section builders ──────────────────────────────────────────────────────────
 
 def _section_what_changed(ind: dict, rules: list[dict]) -> dict:
-    """Section 1: Current-state snapshot — what is happening NOW."""
     bullets = []
 
-    # Yield curve
-    slope = ind.get("curve_slope", np.nan)
-    curve_rg = ind.get("curve_regime", "")
+    def _add(metric, value, suffix="", regime=""):
+        s = f"**{metric}**: {value}{suffix}"
+        if regime and regime not in ("unknown", "normal", ""):
+            s += f" ({regime})"
+        bullets.append(s)
+
+    slope   = ind.get("curve_slope", np.nan)
+    vix     = ind.get("vix", np.nan)
+    dxy     = ind.get("dxy", np.nan)
+    brent   = ind.get("brent", np.nan)
+    copper  = ind.get("copper", np.nan)
+    fao_fpi = ind.get("fao_fpi", np.nan)
+    hy      = ind.get("hy_spread", np.nan)
+    eu_gas  = ind.get("eu_gas_storage_pct", np.nan)
+
     if not _nan(slope):
-        direction = ind.get("curve_direction", "")
-        bullets.append(
-            f"**Yield curve** {curve_rg} at {slope:+.0f} bps (2Y–10Y)"
-            + (f", {direction}" if direction else "")
-        )
-
-    # VIX
-    vix = ind.get("vix", np.nan)
-    vix_rg = ind.get("vix_regime", "")
+        _add("Yield curve", f"{slope:+.0f} bps", regime=ind.get("curve_regime",""))
     if not _nan(vix):
-        bullets.append(f"**VIX** {vix:.1f} ({vix_rg} volatility regime)")
-
-    # Dollar
-    dxy = ind.get("dxy", np.nan)
-    dollar_rg = ind.get("dollar_regime", "")
+        _add("VIX", f"{vix:.1f}", regime=ind.get("vix_regime",""))
     if not _nan(dxy):
-        bullets.append(f"**DXY** {dxy:.1f} — dollar regime: {dollar_rg}")
-
-    # Oil & Copper
-    oil_rg = ind.get("oil_regime", "")
-    oil_chg = ind.get("oil_1m_chg", np.nan)
-    if not _nan(oil_chg):
-        bullets.append(f"**Oil** {_pct(oil_chg)} (1M) — {oil_rg}")
-
-    cu_rg = ind.get("copper_regime", "")
-    cu_chg = ind.get("copper_1m_chg", np.nan)
-    if not _nan(cu_chg):
-        bullets.append(f"**Copper** {_pct(cu_chg)} (1M) — {cu_rg} (industrial signal)")
-
-    # Gold
-    gold_rg = ind.get("gold_regime", "")
-    gold_chg = ind.get("gold_1m_chg", np.nan)
-    if not _nan(gold_chg) and gold_rg in ("rising", "surging"):
-        bullets.append(f"**Gold** {_pct(gold_chg)} (1M) — safe-haven demand {gold_rg}")
-
-    # EM spreads
-    embi = ind.get("embi", np.nan)
-    em_rg = ind.get("em_regime", "")
-    if not _nan(embi):
-        bullets.append(f"**EMBI spreads** {embi:.0f} bps — EM sovereign regime: {em_rg}")
-
-    # HY spreads
-    hy = ind.get("hy_spread", np.nan)
-    hy_rg = ind.get("hy_regime", "")
+        _add("DXY", f"{dxy:.1f}", regime=ind.get("dollar_regime",""))
+    if not _nan(brent):
+        _add("Brent crude", f"${brent:.1f}/bbl", regime=ind.get("oil_regime",""))
+    if not _nan(copper):
+        cu_1m = ind.get("copper_1m_chg", np.nan)
+        _add("Copper", f"{_pct(cu_1m)} 1M", regime=ind.get("copper_regime",""))
     if not _nan(hy):
-        bullets.append(f"**US HY spread** {hy:.0f} bps — credit regime: {hy_rg}")
+        _add("US HY spread", f"{hy:.0f} bps", regime=ind.get("hy_regime",""))
+    if not _nan(eu_gas):
+        _add("EU gas storage", f"{eu_gas:.1f}% full", "(AGSI+)", regime=ind.get("eu_gas_storage_regime",""))
+    if not _nan(fao_fpi):
+        _add("FAO Food Price Index", f"{fao_fpi:.0f}", "(2014-16=100)", regime=ind.get("fao_fpi_regime",""))
 
-    # GPR
-    gpr = ind.get("gpr", np.nan)
-    gpr_rg = ind.get("gpr_regime", "")
-    if not _nan(gpr) and gpr_rg in ("elevated", "high"):
-        bullets.append(f"**Geopolitical risk** (GPR {gpr:.0f}) — {gpr_rg}")
-
-    # Systemic stress
-    if ind.get("systemic_stress_signal"):
-        bullets.append("⚠️ **Systemic stress signal active**: gold and USD rising simultaneously")
-
-    # Financial conditions composite
-    fin_cond = ind.get("fin_cond_regime", "")
-    fci = ind.get("financial_conditions_index", np.nan)
-    if fin_cond in ("tightening",) and not _nan(fci):
-        bullets.append(f"**Financial conditions** tightening (FCI z-score: {fci:.2f})")
-
-    # Compose body
-    n_alerts   = len(_alerts(rules))
-    n_warnings = len(_warnings(rules))
-    stress_lvl = ind.get("macro_regime", "benign")
+    n_alerts   = sum(1 for r in rules if r["level"] == "alert")
+    n_warnings = sum(1 for r in rules if r["level"] == "warning")
+    regime     = ind.get("macro_regime", "benign")
 
     body = (
         f"The current macro configuration registers **{n_alerts} alert(s)** and "
-        f"**{n_warnings} warning(s)** across cross-asset indicators. "
-        f"The composite regime is classified as **{stress_lvl.upper()}**. "
-        "Key readings:"
+        f"**{n_warnings} warning(s)**. Composite regime: **{regime.upper()}**. Key readings:"
     )
+    if not bullets:
+        bullets = ["Insufficient real data to generate readings — check API key configuration."]
 
     return {"title": "What Changed This Week", "body": body, "bullets": bullets}
 
 
 def _section_medium_term(inferences: list[dict]) -> dict:
-    """Section 2: Forward-looking — 3–6 month implications from high/medium confidence rules."""
     bullets = []
-
-    target_horizons = {"medium-term (1-6 months)", "structural (6-18 months)"}
-    forward = [
-        i for i in inferences
-        if i.get("horizon", "") in target_horizons
-        and i.get("confidence") in ("high", "medium")
-    ]
-
+    target = {"medium-term (1-6 months)", "structural (6-18 months)"}
+    forward = [i for i in inferences
+               if i.get("horizon","") in target and i.get("confidence") in ("high","medium")]
     for inf in forward[:6]:
-        icon = inf.get("icon", "📌")
-        conf = inf.get("confidence", "")
-        stmt = inf.get("statement", "")
-        impl = inf.get("implication", "")
-        bullets.append(f"{icon} **[{conf.upper()}]** {stmt} — *{impl}*")
+        icon = inf.get("icon","📌")
+        conf = inf.get("confidence","")
+        stmt = inf.get("statement","")
+        impl = inf.get("implication","")
+        srcs = ", ".join(inf.get("data_sources",[]))
+        bullets.append(f"{icon} **[{conf.upper()}]** {stmt} — *{impl}* _(sources: {srcs})_")
 
     if not bullets:
-        bullets.append(
-            "No high/medium-confidence medium-term signals detected. "
-            "Current regime is broadly stable — maintain baseline positioning."
-        )
+        bullets = ["No high/medium-confidence medium-term signals detected. Macro regime is broadly stable."]
 
     body = (
         "Forward-looking conditional analysis (inference engine, 3–6 month horizon). "
-        "Rules fire on current indicator configuration — confidence reflects robustness "
-        "of the trigger–outcome relationship historically:"
+        "Only rules backed by real data are shown:"
     )
-
     return {"title": "What It Means for the Next 3–6 Months", "body": body, "bullets": bullets}
 
 
-def _section_risks(ind: dict, rules: list[dict], inferences: list[dict]) -> dict:
-    """Section 3: Where risks are building."""
+def _section_risks(ind: dict, rules: list[dict], inferences: list[dict],
+                   propagations: list[dict]) -> dict:
     bullets = []
 
-    # Pull alert-level rules
-    for r in _alerts(rules):
+    # Alerts from rules engine
+    for r in [x for x in rules if x["level"] == "alert"]:
         bullets.append(f"🔴 **{r['category']}**: {r['headline']}")
 
-    # Pull high-confidence near-term inferences that are risk-oriented
-    near = [
-        i for i in inferences
-        if i.get("confidence") == "high"
-        and i.get("horizon") == "near-term (1-4 weeks)"
-    ]
+    # Near-term high-confidence inferences
+    near = [i for i in inferences
+            if i.get("confidence") == "high" and i.get("horizon") == "near-term (1-4 weeks)"]
     for inf in near[:3]:
-        bullets.append(f"⚡ **Near-term risk**: {inf.get('statement', '')}")
+        bullets.append(f"⚡ **Near-term risk**: {inf.get('statement','')}")
 
-    # EM-specific tail risks
-    fx_det = ind.get("fx_res_deteriorating", False)
-    worst  = ind.get("fx_res_worst_country", "")
-    if fx_det:
-        bullets.append(
-            f"📉 **FX reserve drawdown**: {worst or 'Multiple EM economies'} showing "
-            "below-threshold reserve cover — sovereign stress risk elevated."
-        )
+    # Strong cross-sector propagations
+    for prop in [p for p in propagations if p.get("strength") == "strong"]:
+        bullets.append(f"🔗 **Sector cascade**: {prop['headline']}")
 
-    # Sanctions / geo compounding
-    if ind.get("sanctions_elevated") and ind.get("gpr_regime") in ("elevated", "high"):
-        bullets.append(
-            "🚫 **Sanctions + geopolitical risk compounding**: elevated GPR with active "
-            "sanctions pressure raises supply-chain fragmentation risk."
-        )
-
-    # Inverted curve + tightening
-    if ind.get("curve_regime") == "inverted" and ind.get("fin_cond_regime") == "tightening":
-        bullets.append(
-            "📉 **Recession signal**: inverted yield curve + tightening financial conditions "
-            "— historically 12–18 month lead to contraction."
-        )
-
-    # Breakeven inflation + curve flat/inverted
-    if ind.get("inflation_regime") in ("high", "very_high") and ind.get("curve_regime") in ("flat", "inverted"):
-        bullets.append(
-            "🔥 **Stagflation risk**: elevated inflation expectations + "
-            "flat/inverted curve — most difficult environment for policy."
-        )
+    # Specific EM/Africa
+    if ind.get("fx_res_deteriorating") and ind.get("fx_res_worst_country"):
+        bullets.append(f"📉 **FX reserve drawdown**: {ind['fx_res_worst_country']} — sovereign stress risk elevated (World Bank)")
 
     if not bullets:
-        bullets.append("No acute risk signals identified. Monitor leading indicators for early warning.")
+        bullets = ["No acute risk signals identified. Monitor leading indicators for early warning."]
 
-    body = (
-        "Active stress signals and risk accumulation zones identified by the "
-        "rules engine and inference engine. These represent conditions where "
-        "the probability of adverse outcomes is materially elevated:"
-    )
-
+    body = "Active stress signals and risk accumulation zones from real indicator data:"
     return {"title": "Where Risks Are Building", "body": body, "bullets": bullets}
 
 
 def _section_opportunities(ind: dict, inferences: list[dict]) -> dict:
-    """Section 4: Where opportunities are emerging."""
     bullets = []
 
-    # Dollar weakening → EM tailwind
     if ind.get("dollar_regime") == "weakening":
         dxy = ind.get("dxy", np.nan)
-        bullets.append(
-            f"🌍 **EM rotation opportunity**: weakening USD (DXY {_fmt(dxy)}) eases "
-            "financial conditions globally — EM equities and local-currency bonds historically outperform."
-        )
+        bullets.append(f"🌍 **EM rotation**: Weakening USD (DXY {dxy:.1f if not _nan(dxy) else 'N/A'}) eases EM financial conditions — EM equities and local bonds outperform historically.")
 
-    # Copper rising → commodity exporters
     if ind.get("copper_regime") == "rising":
-        cu_chg = ind.get("copper_1m_chg", np.nan)
-        bullets.append(
-            f"🔧 **Industrial commodity cycle**: copper {_pct(cu_chg)} (1M) signals "
-            "improving PMI outlook — DRC, Chile, Zambia copper exporters benefit; "
-            "EV supply chain plays attractive."
-        )
+        bullets.append(f"🔧 **Industrial cycle**: Copper {_pct(ind.get('copper_1m_chg'))} (1M) signals improving PMI — DRC, Chile, Zambia exporters benefit; EV supply chain plays attractive.")
 
-    # Steep curve → banks, value equities
+    if ind.get("eu_gas_storage_regime") == "comfortable":
+        bullets.append("⚡ **Energy normalisation**: EU gas storage comfortable — energy cost headwinds for European industry easing.")
+
     if ind.get("curve_regime") == "steep":
-        slope = ind.get("curve_slope", np.nan)
-        bullets.append(
-            f"🏦 **Steepening curve** ({_fmt(slope, 0)} bps): bank net interest margins expand "
-            "— financials sector and value equities outperform in steep-curve regimes."
-        )
+        bullets.append(f"🏦 **Steepening curve** ({ind.get('curve_slope', 0):+.0f} bps): Bank NIM expands — financials outperform in steep-curve regimes.")
 
-    # VIX elevated → vol selling premium
-    vix_rg = ind.get("vix_regime", "")
-    if vix_rg == "elevated":
-        bullets.append(
-            "📊 **Volatility premium**: elevated VIX creates attractive options premium "
-            "for structured downside protection; mean-reversion plays on VIX futures."
-        )
+    if ind.get("vix_regime") == "elevated":
+        bullets.append("📊 **Volatility premium**: Elevated VIX = rich options premium for structured protection and vol-selling strategies.")
 
-    # Oil surging + Africa producers
     if ind.get("oil_regime") == "surging":
-        bullets.append(
-            "🛢️ **Africa energy producers**: oil surge benefits Nigeria, Angola, Algeria — "
-            "current account and fiscal positions improve; local bond spreads may tighten."
-        )
+        bullets.append("🛢️ **Africa energy exporters**: Oil surge benefits Nigeria, Angola, Algeria — fiscal positions improve, local spreads may tighten.")
 
-    # Low VIX + copper rising + dollar neutral → risk-on
-    if (vix_rg == "normal"
-            and ind.get("copper_regime") in ("stable", "rising")
-            and ind.get("dollar_regime") in ("neutral", "weakening")):
-        bullets.append(
-            "🚀 **Risk-on window**: low volatility + constructive copper + neutral/weak dollar "
-            "— historically a favorable entry point for EM equity and credit."
-        )
+    if ind.get("copper_gold_regime") == "risk_on" and ind.get("vix_regime") == "normal":
+        bullets.append("🚀 **Risk-on window**: Cu/Gold ratio rising + low VIX = historically favourable entry for EM equity and credit.")
 
-    # Gold rising → central bank reserve plays
-    if ind.get("gold_regime") in ("rising", "surging"):
-        bullets.append(
-            "🥇 **Gold / real asset allocation**: sustained gold bid (central bank structural "
-            "accumulation + de-dollarization trend) supports precious metals and royalty companies."
-        )
-
-    # Pull medium-confidence positive inferences
-    opp_inferences = [
-        i for i in inferences
-        if i.get("confidence") == "medium"
-        and "opportunity" in i.get("implication", "").lower()
-    ]
-    for inf in opp_inferences[:2]:
-        bullets.append(f"💡 {inf.get('statement', '')} — *{inf.get('implication', '')}*")
+    # Medium-confidence opportunity inferences
+    opp = [i for i in inferences
+           if i.get("confidence") == "medium"
+           and "opportunit" in i.get("implication","").lower()]
+    for inf in opp[:2]:
+        bullets.append(f"💡 {inf.get('statement','')} — *{inf.get('implication','')}*")
 
     if not bullets:
-        bullets.append(
-            "Current regime does not present high-conviction tactical opportunities. "
-            "Maintain diversification; build dry powder for regime-shift entry points."
-        )
+        bullets = ["No high-conviction tactical opportunities in current regime. Build dry powder for regime-shift entry."]
 
-    body = (
-        "Macro configuration-driven opportunity identification. "
-        "These are regime-consistent positioning ideas — not investment advice:"
-    )
-
+    body = "Regime-consistent positioning ideas from real indicator configuration (not investment advice):"
     return {"title": "Where Opportunities Are Emerging", "body": body, "bullets": bullets}
 
 
-def _section_watch_next(rules: list[dict], inferences: list[dict], ind: dict) -> dict:
-    """Section 5: What to watch next — consolidated watch list."""
-    watch_set: dict[str, int] = {}  # item → priority (lower = higher priority)
+def _section_watch_next(rules: list[dict], inferences: list[dict],
+                        propagations: list[dict]) -> dict:
+    watch_set: dict[str, int] = {}
 
-    # Collect from rules
     for r in rules:
-        level = r.get("level", "info")
-        priority = {"alert": 0, "warning": 1, "info": 2}.get(level, 3)
+        priority = {"alert": 0, "warning": 1, "info": 2}.get(r.get("level","info"), 3)
         for item in r.get("watch", []):
             if item not in watch_set or watch_set[item] > priority:
                 watch_set[item] = priority
 
-    # Deduplicate and sort
-    sorted_items = sorted(watch_set.items(), key=lambda x: x[1])
-    top_watch = [item for item, _ in sorted_items[:10]]
+    sorted_items = [item for item, _ in sorted(watch_set.items(), key=lambda x: x[1])]
 
-    # Add horizon-specific items from inferences
-    near_term = [
-        i for i in inferences
-        if i.get("horizon") == "near-term (1-4 weeks)"
-        and i.get("confidence") == "high"
+    # Near-term high-confidence trigger conditions
+    for inf in [i for i in inferences
+                if i.get("confidence") == "high" and i.get("horizon") == "near-term (1-4 weeks)"]:
+        item = f"⚡ Trigger: {inf.get('trigger','')} (near-term)"
+        if item not in sorted_items:
+            sorted_items.insert(0, item)
+
+    # Sector propagation early warnings
+    for prop in [p for p in propagations if p.get("strength") == "strong"]:
+        item = f"🔗 Sector chain: {prop.get('from_sector','')} → {prop.get('to_sector','')}"
+        if item not in sorted_items:
+            sorted_items.append(item)
+
+    # Always-on structural items
+    structural = [
+        "IMF program status (Ghana, Kenya, Ethiopia, Egypt)",
+        "Eurobond maturity wall 2025–2027",
+        "FX reserve import cover (<3M = critical)",
+        "FAO monthly Food Price Index release",
+        "EIA weekly petroleum status report",
+        "EU gas storage injection pace (AGSI+)",
     ]
-    for inf in near_term[:2]:
-        trigger = inf.get("trigger", "")
-        if trigger and trigger not in top_watch:
-            top_watch.insert(0, f"⚡ {trigger} (near-term trigger)")
+    for item in structural:
+        if item not in sorted_items:
+            sorted_items.append(item)
 
-    # Key structural items always worth watching in Africa/EM context
-    structural_defaults = [
-        "IMF program status updates",
-        "Eurobond maturity wall 2025–2027 (Ghana, Kenya, Ethiopia, Egypt)",
-        "FX reserve import cover (<3M threshold = critical)",
-        "Fed dot plot and rate path revisions",
-    ]
-    for item in structural_defaults:
-        if item not in top_watch:
-            top_watch.append(item)
-
-    bullets = [f"• {item}" for item in top_watch[:12]]
-
-    body = (
-        "Consolidated watch list for the coming week. "
-        "Prioritized by current alert severity and forward-looking inference triggers:"
-    )
-
+    bullets = [f"• {item}" for item in sorted_items[:12]]
+    body = "Priority watch list for the coming week (sources: FRED, yfinance, EIA, AGSI+, FAO, World Bank):"
     return {"title": "What to Watch Next", "body": body, "bullets": bullets}
+
+
+def _section_sector_summary(sectors: dict) -> dict:
+    bullets = []
+    for name, data in sectors.items():
+        status = data.get("status", "no_data")
+        headline = data.get("headline", "No data")
+        icon = "🔴" if status in ("crisis","contraction") else \
+               "🟠" if status in ("stress","slowing","stressed") else \
+               "🟢" if status in ("normal","comfortable","expanding") else "⚫"
+        bullets.append(f"{icon} **{name}**: {headline}")
+        for ph in data.get("placeholders", []):
+            bullets.append(f"  ⚫ PLACEHOLDER: {ph}")
+
+    body = "Sector intelligence snapshot (real data where available; PLACEHOLDERs labelled):"
+    return {"title": "Sector Intelligence Summary", "body": body, "bullets": bullets}
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def generate(
-    ind: dict,
-    rules: list[dict],
-    inferences: list[dict],
-    as_of: Optional[datetime.date] = None,
+    ind:          dict,
+    rules:        list[dict],
+    inferences:   list[dict],
+    propagations: list[dict],
+    sectors:      dict,
+    as_of:        Optional[datetime.date] = None,
 ) -> dict:
-    """
-    Generate the weekly macro intelligence note.
-
-    Parameters
-    ----------
-    ind         : indicators dict from indicators.compute_all()
-    rules       : output of rules_engine.run(ind)
-    inferences  : output of inference_engine.run(ind, rules)
-    as_of       : date for the note header (defaults to today)
-
-    Returns
-    -------
-    dict with keys:
-        as_of        : str (ISO date)
-        headline     : str
-        regime_label : str (CRISIS / STRESSED / CAUTIOUS / BENIGN)
-        regime_desc  : str
-        regime_emoji : str
-        sections     : list[{title, body, bullets}]
-        footer       : str
-        data_sources : list[str]
-    """
-    as_of = as_of or datetime.date.today()
+    """Generate the weekly macro intelligence note."""
+    as_of     = as_of or datetime.date.today()
     as_of_str = as_of.strftime("%d %B %Y")
-
-    regime = ind.get("macro_regime", "benign")
+    regime    = ind.get("macro_regime", "benign")
     fin_score = ind.get("financial_stress_score", 0)
     geo_score = ind.get("geo_stress_score", 0)
 
-    # Headline
-    n_alerts   = len(_alerts(rules))
-    n_warnings = len(_warnings(rules))
-    n_high_inf = len(_high_conf(inferences))
+    n_alerts   = sum(1 for r in rules if r["level"] == "alert")
+    n_warnings = sum(1 for r in rules if r["level"] == "warning")
+    n_high_inf = sum(1 for i in inferences if i.get("confidence") == "high")
 
     if regime == "crisis":
-        headline = f"CRISIS ALERT — {n_alerts} simultaneous stress signals across cross-asset indicators"
+        headline = f"CRISIS ALERT — {n_alerts} simultaneous stress signals; {n_high_inf} high-confidence forward risks"
     elif regime == "stressed":
-        headline = (
-            f"Elevated stress regime — {n_alerts} alerts, {n_warnings} warnings detected; "
-            f"{n_high_inf} high-confidence forward risks flagged"
-        )
+        headline = f"Elevated stress — {n_alerts} alerts, {n_warnings} warnings; {n_high_inf} high-confidence forward risks"
     elif regime == "cautious":
-        headline = (
-            f"Cautious macro regime — {n_warnings} warning signals; "
-            "underlying vulnerabilities warrant active monitoring"
-        )
+        headline = f"Cautious — {n_warnings} warning signals; underlying vulnerabilities warrant monitoring"
     else:
-        headline = "Broadly benign macro environment — no acute cross-asset stress signals"
+        headline = "Broadly benign — no acute cross-asset stress signals detected"
 
-    # Regime description
-    regime_desc = _REGIME_DESC.get(regime, "")
-    regime_emoji = _REGIME_EMOJI.get(regime, "⚪")
-
-    # Build sections
     sections = [
         _section_what_changed(ind, rules),
         _section_medium_term(inferences),
-        _section_risks(ind, rules, inferences),
+        _section_risks(ind, rules, inferences, propagations),
         _section_opportunities(ind, inferences),
-        _section_watch_next(rules, inferences, ind),
+        _section_watch_next(rules, inferences, propagations),
+        _section_sector_summary(sectors),
     ]
 
-    # Data source labels
-    data_sources = []
-    for key in (
-        "curve_source", "vix_source", "dxy_source",
-        "oil_source", "copper_source", "gpr_source",
-        "em_spread_source", "fx_res_source",
-    ):
-        src = ind.get(key, "")
-        if src and src not in data_sources:
-            data_sources.append(src)
+    # Collect real data sources
+    data_sources = list({s for i in inferences for s in i.get("data_sources",[]) if s})
+    data_sources += list({s for r in rules if "FRED" in r.get("headline","") or "yfinance" in r.get("headline","")})
 
     footer = (
         f"Macro Intelligence Briefing — {as_of_str} | "
-        f"Financial stress score: {fin_score}/7 | "
-        f"Geopolitical stress score: {geo_score}/4 | "
-        "This note is generated algorithmically. Not investment advice."
+        f"Financial stress: {fin_score}/7 | Geo-risk: {geo_score}/4 | "
+        "Real data only. Placeholders labelled. Not investment advice."
     )
 
     return {
         "as_of":        as_of_str,
         "headline":     headline,
         "regime_label": regime.upper(),
-        "regime_desc":  regime_desc,
-        "regime_emoji": regime_emoji,
+        "regime_desc":  _REGIME_DESC.get(regime, ""),
+        "regime_emoji": _REGIME_EMOJI.get(regime, "⚪"),
         "sections":     sections,
         "footer":       footer,
         "data_sources": data_sources,
@@ -497,9 +305,6 @@ def generate(
 
 
 def to_markdown(note: dict) -> str:
-    """
-    Convert a note dict to a plain Markdown string (for export / clipboard).
-    """
     lines = [
         f"# Macro Intelligence Briefing — {note['as_of']}",
         "",
@@ -509,19 +314,12 @@ def to_markdown(note: dict) -> str:
         f"## {note['headline']}",
         "",
     ]
-
     for sec in note["sections"]:
-        lines.append(f"### {sec['title']}")
+        lines += [f"### {sec['title']}", "", sec["body"], ""]
+        lines += [f"- {b}" for b in sec["bullets"]]
         lines.append("")
-        lines.append(sec["body"])
-        lines.append("")
-        for b in sec["bullets"]:
-            lines.append(f"- {b}")
-        lines.append("")
-
     if note.get("data_sources"):
-        lines.append(f"*Data sources: {', '.join(note['data_sources'])}*")
+        lines.append(f"*Sources: {', '.join(sorted(set(note['data_sources'])))}*")
         lines.append("")
-
     lines.append(f"*{note['footer']}*")
     return "\n".join(lines)

@@ -1,15 +1,13 @@
 """
-indicators.py — Compute all regime indicators from raw data.
+indicators.py — Compute all regime indicators from real data only.
 
-Input:  raw DataFrames / Series from data_fetchers.py
-Output: flat dict consumed by rules_engine, inference_engine, narrative_generator, and the UI.
+Rules:
+  - If data is None or insufficient, the indicator is set to np.nan / None / "unknown".
+  - No synthetic fallback values.
+  - All indicators are computed from real data passed in.
 
-Organized in 5 domains:
-  MACRO      — yield curve, dollar, financial conditions, inflation
-  GEO-RISK   — GPR, shipping, sanctions, cyber
-  COMMODITIES— oil, copper tightness, critical minerals
-  EM/AFRICA  — spreads, FX reserves adequacy, USD debt vulnerability
-  MARKET     — VIX regime, correlation, term premium, breakevens
+Input:  raw data from data_fetchers.py
+Output: flat dict consumed by all downstream engines and the UI.
 """
 
 from __future__ import annotations
@@ -20,441 +18,588 @@ import pandas as pd
 from config import THRESH
 
 
-# ── Safe helpers ───────────────────────────────────────────────────────────────
-def _last(s, default=np.nan):
-    if isinstance(s, pd.DataFrame): s = s.iloc[:, 0]
-    if s is None: return default
-    s = s.dropna()
-    return float(s.iloc[-1]) if len(s) else default
+def _nan(v) -> bool:
+    return v is None or (isinstance(v, float) and np.isnan(float(v)))
 
 
-def _prev(s, n=1, default=np.nan):
-    if s is None: return default
-    s = s.dropna()
-    return float(s.iloc[-1 - n]) if len(s) > n else default
-
-
-def _chg(s, n=22, pct=True):
-    """n-period change. n=22 ≈ 1 month trading days."""
-    if s is None: return np.nan
-    s = s.dropna()
-    if len(s) <= n: return np.nan
-    return float((s.iloc[-1] / s.iloc[-n] - 1) if pct else (s.iloc[-1] - s.iloc[-n]))
-
-
-def _roll_std(s, n=22):
-    if s is None: return np.nan
-    s = s.dropna()
-    return float(s.tail(n).std()) if len(s) >= n else np.nan
-
-
-def _roll_corr(a: pd.Series, b: pd.Series, n=60) -> float:
-    try:
-        df = pd.concat([a.dropna(), b.dropna()], axis=1).dropna()
-        return float(df.tail(n).corr().iloc[0, 1]) if len(df) >= n else np.nan
-    except Exception:
+def _last(series: pd.Series | None) -> float:
+    """Safe last value from a Series."""
+    if series is None or series.empty:
         return np.nan
+    v = series.dropna()
+    return float(v.iloc[-1]) if not v.empty else np.nan
 
 
-def _zscore(s: pd.Series, window=252) -> float:
-    """Z-score of latest value vs rolling window."""
-    s = s.dropna()
-    if len(s) < window // 2: return np.nan
-    mu, sigma = float(s.tail(window).mean()), float(s.tail(window).std())
-    return float((s.iloc[-1] - mu) / sigma) if sigma > 0 else 0.0
+def _chg(series: pd.Series | None, periods: int) -> float:
+    """Safe N-period simple return."""
+    if series is None or len(series) <= periods:
+        return np.nan
+    s = series.dropna()
+    if len(s) <= periods:
+        return np.nan
+    return float(s.iloc[-1] / s.iloc[-periods] - 1)
+
+
+def _yoy(series: pd.Series | None, freq: str = "M") -> float:
+    """Year-over-year % change (monthly or weekly series)."""
+    periods = 12 if freq == "M" else 52
+    return _chg(series, periods)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MACRO indicators
+# Domain functions
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _macro(ind: dict, mkt: pd.DataFrame, yields: pd.DataFrame, fred: dict):
-    # ── Yield curve ──────────────────────────────────────────────────────────
-    yld_10 = yields.get("10Y") if isinstance(yields, pd.DataFrame) and "10Y" in yields.columns else None
-    yld_2  = yields.get("2Y")  if isinstance(yields, pd.DataFrame) and "2Y"  in yields.columns else None
-    yld_3m = yields.get("3M")  if isinstance(yields, pd.DataFrame) and "3M"  in yields.columns else None
-    yld_30 = yields.get("30Y") if isinstance(yields, pd.DataFrame) and "30Y" in yields.columns else None
+def _macro(mkt: dict | None, yields: pd.DataFrame | None,
+           fred: dict | None) -> dict:
+    """Yield curve, VIX, dollar, financial conditions, inflation."""
+    out = {}
 
-    if yld_10 is not None and yld_2 is not None:
-        slope_s = (yld_10 - yld_2) * 100
-        ind["curve_slope"]          = _last(slope_s)
-        ind["curve_slope_1m"]       = _prev(slope_s.dropna(), n=22)
-        ind["curve_slope_series"]   = slope_s
-        ind["us10y"]                = _last(yld_10)
-        ind["us2y"]                 = _last(yld_2)
-        ind["us3m"]                 = _last(yld_3m)
-        ind["us30y"]                = _last(yld_30)
+    # ── Yield curve (prefer FRED yields df; fallback to yfinance) ────────────
+    slope = np.nan
+    if yields is not None and "10Y" in yields.columns and "2Y" in yields.columns:
+        last10 = _last(yields["10Y"])
+        last2  = _last(yields["2Y"])
+        if not (_nan(last10) or _nan(last2)):
+            slope = (last10 - last2) * 100  # in bps
+    elif mkt is not None:
+        t10 = _last(mkt.get("us10y"))
+        t2  = _last(mkt.get("us2y"))
+        if not (_nan(t10) or _nan(t2)):
+            slope = (t10 - t2) * 10  # ^TNX is in % * 10
 
-        slope = ind["curve_slope"]
-        ind["curve_regime"] = (
-            "inverted" if slope < THRESH["curve_inverted"] else
-            "flat"     if slope < THRESH["curve_flat"]     else
-            "steep"    if slope > THRESH["curve_steep"]    else "normal"
-        )
-        ind["curve_direction"] = (
-            "steepening" if not np.isnan(ind["curve_slope_1m"]) and slope > ind["curve_slope_1m"]
-            else "flattening"
-        )
-
-    # ── Dollar regime ─────────────────────────────────────────────────────────
-    if "dxy" in mkt.columns:
-        dxy_s  = mkt["dxy"].dropna()
-        d      = _last(dxy_s)
-        ma50   = float(dxy_s.tail(50).mean()) if len(dxy_s) >= 50 else d
-        ma200  = float(dxy_s.tail(200).mean()) if len(dxy_s) >= 200 else d
-        ind["dxy"]          = d
-        ind["dxy_1m_chg"]   = _chg(dxy_s)
-        ind["dxy_zscore"]   = _zscore(dxy_s)
-        ind["dollar_regime"] = (
-            "very_strong" if d > THRESH["dxy_very_strong"] else
-            "strong"      if d > THRESH["dxy_strong"]      else
-            "weakening"   if d < ma50 * 0.97               else "neutral"
-        )
-        ind["dollar_vs_200ma"] = "above" if d > ma200 else "below"
-
-    # ── Financial conditions composite ────────────────────────────────────────
-    fci_components = []
-    if "hy_spread" in fred:
-        hy  = fred["hy_spread"].dropna()
-        hy_z = _zscore(hy)
-        ind["hy_spread"] = _last(hy)
-        ind["hy_1m_chg"] = _chg(hy)
-        if not np.isnan(hy_z): fci_components.append(hy_z)
-    if "nfci" in fred:
-        nf   = fred["nfci"].dropna()
-        ind["nfci"]        = _last(nf)
-        ind["nfci_zscore"] = _zscore(nf)
-        if not np.isnan(ind["nfci_zscore"]): fci_components.append(ind["nfci_zscore"])
-    if "vix" in mkt.columns:
-        vix_z = _zscore(mkt["vix"].dropna())
-        if not np.isnan(vix_z): fci_components.append(vix_z)
-    if "hyg" in mkt.columns:
-        hyg_chg = _chg(mkt["hyg"])
-        ind["hyg_1m_chg"] = hyg_chg
-        if not np.isnan(hyg_chg): fci_components.append(-hyg_chg / 0.05)
-
-    ind["fci_composite"] = float(np.mean(fci_components)) if fci_components else np.nan
-    ind["fin_cond_regime"] = (
-        "tightening" if not np.isnan(ind.get("fci_composite", np.nan)) and ind["fci_composite"] > 0.5 else
-        "easing"     if not np.isnan(ind.get("fci_composite", np.nan)) and ind["fci_composite"] < -0.5 else
-        "neutral"
-    )
-
-    # ── Inflation signals ─────────────────────────────────────────────────────
-    if "breakeven5y" in fred:
-        be5 = fred["breakeven5y"].dropna()
-        ind["breakeven5y"]    = _last(be5)
-        ind["breakeven5y_1m"] = _chg(be5)
-        be_val = ind["breakeven5y"]
-        ind["inflation_regime"] = (
-            "very_high" if be_val > THRESH["breakeven_very_high"] else
-            "high"      if be_val > THRESH["breakeven_high"]       else "normal"
-        )
-    if "breakeven5y5y" in fred:
-        be55 = fred["breakeven5y5y"].dropna()
-        ind["breakeven5y5y"]    = _last(be55)
-        ind["breakeven5y5y_1m"] = _chg(be55)
-
-    # ── Term premium ──────────────────────────────────────────────────────────
-    if "term_premium" in fred:
-        tp = fred["term_premium"].dropna()
-        ind["term_premium"]    = _last(tp)
-        ind["term_premium_1m"] = _chg(tp)
-    elif yld_10 is not None and yld_3m is not None:
-        # Simplified proxy: 10Y - (rolling 10Y average of 3M)
-        r3m = yld_3m.dropna()
-        if len(r3m) >= 252:
-            expected_10y = float(r3m.rolling(252).mean().iloc[-1])
-            ind["term_premium"] = float((_last(yld_10) or 0) - expected_10y)
+    out["curve_slope"] = slope
+    if not _nan(slope):
+        if slope < THRESH["curve_inverted"]:
+            out["curve_regime"] = "inverted"
+        elif slope < THRESH["curve_flat"]:
+            out["curve_regime"] = "flat"
+        elif slope > THRESH["curve_steep"]:
+            out["curve_regime"] = "steep"
         else:
-            ind["term_premium"] = np.nan
+            out["curve_regime"] = "normal"
+        # Direction (last 20 trading days)
+        if yields is not None and "10Y" in yields.columns and "2Y" in yields.columns:
+            spread_ts = (yields["10Y"] - yields["2Y"]).dropna() * 100
+            if len(spread_ts) >= 20:
+                direction = "steepening" if spread_ts.iloc[-1] > spread_ts.iloc[-20] else "flattening"
+                out["curve_direction"] = direction
+    else:
+        out["curve_regime"]    = "unknown"
+        out["curve_direction"] = "unknown"
+
+    # ── VIX ──────────────────────────────────────────────────────────────────
+    vix = _last(mkt.get("vix") if mkt is not None else None)
+    out["vix"] = vix
+    if not _nan(vix):
+        if vix > THRESH["vix_high"]:
+            out["vix_regime"] = "high"
+        elif vix > THRESH["vix_elevated"]:
+            out["vix_regime"] = "elevated"
+        else:
+            out["vix_regime"] = "normal"
+        # VIX term structure: compare VIX (spot) vs VIX3M proxy (not available without sub)
+        # Use 20-day rolling avg as backwardation proxy
+        vix_s = mkt.get("vix") if mkt is not None else None
+        if vix_s is not None and len(vix_s) >= 20:
+            vix_avg = float(vix_s.dropna().iloc[-20:].mean())
+            out["vix_term_structure"] = "backwardation" if vix > vix_avg else "contango"
+        else:
+            out["vix_term_structure"] = "unknown"
+    else:
+        out["vix_regime"] = "unknown"
+        out["vix_term_structure"] = "unknown"
+
+    # ── Dollar ───────────────────────────────────────────────────────────────
+    dxy = _last(mkt.get("dxy") if mkt is not None else None)
+    out["dxy"] = dxy
+    if not _nan(dxy):
+        dxy_1m = _chg(mkt.get("dxy") if mkt is not None else None, 22)
+        if dxy > THRESH["dxy_very_strong"]:
+            out["dollar_regime"] = "very_strong"
+        elif dxy > THRESH["dxy_strong"]:
+            out["dollar_regime"] = "strong"
+        elif not _nan(dxy_1m) and dxy_1m < -0.02:
+            out["dollar_regime"] = "weakening"
+        else:
+            out["dollar_regime"] = "neutral"
+    else:
+        out["dollar_regime"] = "unknown"
+
+    # ── FRED macro (spreads, breakevens, NFCI, term premium) ─────────────────
+    hy_spread    = _last(fred.get("hy_spread")    if fred else None)
+    ig_spread    = _last(fred.get("ig_spread")    if fred else None)
+    nfci         = _last(fred.get("nfci")         if fred else None)
+    term_prem    = _last(fred.get("term_premium") if fred else None)
+    be5          = _last(fred.get("breakeven5y")  if fred else None)
+    be55         = _last(fred.get("breakeven5y5y") if fred else None)
+    indpro       = fred.get("indpro_us")          if fred else None
+
+    out["hy_spread"]     = hy_spread
+    out["ig_spread"]     = ig_spread
+    out["nfci"]          = nfci
+    out["term_premium"]  = term_prem
+    out["breakeven5y"]   = be5
+    out["breakeven5y5y"] = be55
+
+    # HY regime
+    if not _nan(hy_spread):
+        if hy_spread > THRESH["hy_crisis"]:
+            out["hy_regime"] = "crisis"
+        elif hy_spread > THRESH["hy_stress"]:
+            out["hy_regime"] = "stress"
+        else:
+            out["hy_regime"] = "normal"
+    else:
+        out["hy_regime"] = "unknown"
+
+    # Financial conditions regime (NFCI or HY as proxy)
+    if not _nan(nfci):
+        if nfci > THRESH["nfci_crisis"]:
+            out["fin_cond_regime"] = "crisis"
+        elif nfci > THRESH["nfci_tight"]:
+            out["fin_cond_regime"] = "tightening"
+        else:
+            out["fin_cond_regime"] = "neutral"
+    elif not _nan(hy_spread):
+        hy_chg = _chg(fred.get("hy_spread") if fred else None, 22)
+        out["fin_cond_regime"] = "tightening" if (not _nan(hy_chg) and hy_chg > 0.1) else "neutral"
+    else:
+        out["fin_cond_regime"] = "unknown"
+
+    # Inflation regime (from breakevens)
+    be = be5 if not _nan(be5) else be55
+    if not _nan(be):
+        if be > THRESH["breakeven_very_high"]:
+            out["inflation_regime"] = "very_high"
+        elif be > THRESH["breakeven_high"]:
+            out["inflation_regime"] = "high"
+        else:
+            out["inflation_regime"] = "normal"
+    else:
+        out["inflation_regime"] = "unknown"
+
+    # MOVE proxy — compute from FRED yield daily changes if available
+    if yields is not None and "10Y" in yields.columns:
+        y10 = yields["10Y"].dropna()
+        if len(y10) >= 22:
+            move_p = float(y10.diff().dropna().iloc[-22:].std() * np.sqrt(252) * 100)
+            out["move_proxy"] = move_p
+            out["move_regime"] = "elevated" if move_p > 100 else "normal"
+        else:
+            out["move_proxy"] = np.nan
+            out["move_regime"] = "unknown"
+    else:
+        out["move_proxy"] = np.nan
+        out["move_regime"] = "unknown"
+
+    # Industrial production momentum
+    if indpro is not None and not indpro.empty:
+        indpro_yoy = _yoy(indpro, "M") * 100
+        out["indpro_yoy"] = indpro_yoy
+        out["indpro_regime"] = "contraction" if indpro_yoy < THRESH["indpro_recession"] else \
+                               "slowing" if indpro_yoy < 0 else "expanding"
+    else:
+        out["indpro_yoy"]    = np.nan
+        out["indpro_regime"] = "unknown"
+
+    # Cross-asset correlation (equity vs bonds, 60-day rolling)
+    if mkt is not None:
+        spx = mkt.get("spx")
+        tip = mkt.get("tip")
+        if spx is not None and tip is not None and len(spx) >= 60 and len(tip) >= 60:
+            spx_r = spx.pct_change().dropna()
+            tip_r = tip.pct_change().dropna()
+            aligned = pd.concat([spx_r, tip_r], axis=1).dropna()
+            if len(aligned) >= 60:
+                corr = float(aligned.iloc[-60:].corr().iloc[0, 1])
+                out["eq_bond_corr"] = corr
+                out["correlation_regime"] = "stress" if corr > 0.3 else "normal"
+            else:
+                out["eq_bond_corr"] = np.nan
+                out["correlation_regime"] = "unknown"
+        else:
+            out["eq_bond_corr"] = np.nan
+            out["correlation_regime"] = "unknown"
+    else:
+        out["eq_bond_corr"] = np.nan
+        out["correlation_regime"] = "unknown"
+
+    return out
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# GEO-RISK indicators
-# ══════════════════════════════════════════════════════════════════════════════
+def _commodities(mkt: dict | None, fred: dict | None,
+                 oil_inv: pd.Series | None,
+                 eu_gas: pd.DataFrame | None,
+                 us_gas: pd.Series | None,
+                 fao_fpi: pd.Series | None) -> dict:
+    """Oil, copper, gold, gas, agricultural indicators."""
+    out = {}
 
-def _georisk(ind: dict, gpr: pd.Series, ship: pd.Series,
-             sanctions: pd.Series, cyber: pd.Series):
-    if not gpr.empty:
-        gv = _last(gpr)
-        ind["gpr"]         = gv
-        ind["gpr_mom_chg"] = _chg(gpr, n=1)
-        ind["gpr_3m_chg"]  = _chg(gpr, n=3)
-        ind["gpr_regime"]  = (
-            "high"     if gv > THRESH["gpr_high"]     else
-            "elevated" if gv > THRESH["gpr_elevated"] else "normal"
+    # ── Oil ───────────────────────────────────────────────────────────────────
+    brent = _last(mkt.get("brent") if mkt is not None else None)
+    if _nan(brent) and fred:
+        brent = _last(fred.get("brent_fred"))
+    out["brent"] = brent
+    oil_1m = _chg(mkt.get("brent") if mkt is not None else None, 22)
+    out["oil_1m_chg"] = oil_1m
+    if not _nan(oil_1m):
+        if oil_1m > THRESH["oil_surge"]:
+            out["oil_regime"] = "surging"
+        elif oil_1m < THRESH["oil_crash"]:
+            out["oil_regime"] = "crashing"
+        else:
+            out["oil_regime"] = "stable"
+    else:
+        out["oil_regime"] = "unknown"
+
+    # US oil inventories (vs 5-year average)
+    if oil_inv is not None and not oil_inv.empty and len(oil_inv) >= 260:
+        last_inv   = float(oil_inv.iloc[-1])
+        avg_5y     = float(oil_inv.iloc[-260:].mean())
+        inv_dev    = (last_inv - avg_5y) / avg_5y
+        out["us_oil_inventory_last"] = last_inv
+        out["us_oil_inventory_dev"]  = inv_dev
+        out["oil_inventory_regime"]  = (
+            "stress" if inv_dev < THRESH["us_oil_inv_dev_stress"] else
+            "surplus" if inv_dev > 0.05 else "normal"
         )
+    else:
+        out["us_oil_inventory_last"] = np.nan
+        out["us_oil_inventory_dev"]  = np.nan
+        out["oil_inventory_regime"]  = "unknown"
 
-    if not ship.empty:
-        sv = _last(ship)
-        ind["shipping"]        = sv
-        ind["shipping_1m_chg"] = _chg(ship, n=4)  # weekly data
-        ind["shipping_regime"] = (
-            "crisis" if sv > THRESH["shipping_crisis"] else
-            "stress" if sv > THRESH["shipping_stress"] else "normal"
-        )
-
-    if not sanctions.empty:
-        sc = _last(sanctions)
-        ind["sanctions"]        = sc
-        ind["sanctions_1m_chg"] = _chg(sanctions, n=1)
-        ind["sanctions_elevated"] = bool(sc > 150)
-
-    if not cyber.empty:
-        cy = _last(cyber)
-        ind["cyber_risk"]    = cy
-        ind["cyber_elevated"] = bool(cy > 150)
-
-    # Composite geo-risk score (0-4)
-    ind["geo_stress_score"] = int(sum([
-        ind.get("gpr_regime") in ("elevated", "high"),
-        ind.get("shipping_regime") in ("stress", "crisis"),
-        ind.get("sanctions_elevated", False),
-        ind.get("cyber_elevated", False),
-    ]))
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# COMMODITY indicators
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _commodities(ind: dict, mkt: pd.DataFrame, minerals: pd.DataFrame):
-    # ── Oil ──────────────────────────────────────────────────────────────────
-    if "brent" in mkt.columns:
-        oil_s = mkt["brent"].dropna()
-        oil   = _last(oil_s)
-        oil_chg_1m = _chg(oil_s)
-        oil_vol    = _roll_std(oil_s.pct_change().dropna()) * np.sqrt(252) * 100  # annualised %
-        ind["oil"]          = oil
-        ind["oil_1m_chg"]   = oil_chg_1m
-        ind["oil_vol"]      = oil_vol
-        ind["oil_regime"]   = (
-            "surging"  if not np.isnan(oil_chg_1m) and oil_chg_1m >  THRESH["oil_surge"] else
-            "crashing" if not np.isnan(oil_chg_1m) and oil_chg_1m <  THRESH["oil_crash"] else "stable"
-        )
-        # Oil stress index: price + volatility
-        oil_stress = 0.0
-        if oil > 100:           oil_stress += 1
-        if oil > 120:           oil_stress += 1
-        if not np.isnan(oil_vol) and oil_vol > 35: oil_stress += 1
-        ind["oil_stress_score"] = oil_stress
-
-    # ── Copper tightness ─────────────────────────────────────────────────────
-    if "copper" in mkt.columns:
-        cu_s     = mkt["copper"].dropna()
-        cu       = _last(cu_s)
-        cu_chg_1m = _chg(cu_s)
-        # LME inventory proxy: falling price with rising copper = tighter (mock score)
-        # Real: replace with LME warrants data
-        cu_trend_3m = _chg(cu_s, n=63)
-        ind["copper"]         = cu
-        ind["copper_1m_chg"]  = cu_chg_1m
-        ind["copper_3m_chg"]  = cu_trend_3m
-        ind["copper_regime"]  = (
-            "rising"  if not np.isnan(cu_chg_1m) and cu_chg_1m >  THRESH["copper_boom"] else
-            "falling" if not np.isnan(cu_chg_1m) and cu_chg_1m <  THRESH["copper_bust"] else "stable"
-        )
-        ind["growth_signal"] = (
-            "positive" if not np.isnan(cu_chg_1m) and cu_chg_1m >  0.03 else
-            "negative" if not np.isnan(cu_chg_1m) and cu_chg_1m < -0.03 else "neutral"
-        )
-        # Copper/Gold ratio (growth vs safety signal)
-        if "gold" in mkt.columns:
-            gold = _last(mkt["gold"])
-            if gold and gold > 0:
-                cu_au_ratio = cu / (gold / 1000)  # copper ($/lb) / (gold ($/oz) / 1000)
-                ind["copper_gold_ratio"]     = cu_au_ratio
-                ind["copper_gold_1m_chg"]    = _chg(
-                    (mkt["copper"] / mkt["gold"] * 1000).dropna())
-                ind["copper_gold_regime"] = "risk_on" if cu_au_ratio > 0.18 else "risk_off"
+    # ── Copper ───────────────────────────────────────────────────────────────
+    copper = _last(mkt.get("copper") if mkt is not None else None)
+    out["copper"] = copper
+    cu_1m = _chg(mkt.get("copper") if mkt is not None else None, 22)
+    out["copper_1m_chg"] = cu_1m
+    if not _nan(cu_1m):
+        if cu_1m > THRESH["copper_boom"]:
+            out["copper_regime"] = "rising"
+        elif cu_1m < THRESH["copper_bust"]:
+            out["copper_regime"] = "falling"
+        else:
+            out["copper_regime"] = "stable"
+    else:
+        out["copper_regime"] = "unknown"
 
     # ── Gold ─────────────────────────────────────────────────────────────────
-    if "gold" in mkt.columns:
-        g_s = mkt["gold"].dropna()
-        ind["gold"]        = _last(g_s)
-        ind["gold_1m_chg"] = _chg(g_s)
-        ind["gold_regime"] = (
-            "surging" if not np.isnan(ind["gold_1m_chg"]) and ind["gold_1m_chg"] > 0.05 else
-            "falling" if not np.isnan(ind["gold_1m_chg"]) and ind["gold_1m_chg"] < -0.04 else "stable"
-        )
-
-    # ── Critical minerals composite ───────────────────────────────────────────
-    if not minerals.empty:
-        minerals_last = minerals.dropna().iloc[-1] if len(minerals.dropna()) > 0 else None
-        if minerals_last is not None:
-            ind["minerals_composite"] = float(minerals_last.mean())
-            ind["minerals_1m_chg"]    = float(minerals.pct_change().dropna().iloc[-1].mean()) \
-                if len(minerals.pct_change().dropna()) > 0 else np.nan
-            ind["minerals_stressed"]  = bool(
-                not np.isnan(ind["minerals_1m_chg"]) and ind["minerals_1m_chg"] > 0.08)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# EM / AFRICA indicators
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _em_africa(ind: dict, mkt: pd.DataFrame, em_spreads: pd.DataFrame,
-               fx_reserves: pd.DataFrame):
-    # ── EM sovereign spreads ──────────────────────────────────────────────────
-    if not em_spreads.empty and "EMBI Global" in em_spreads.columns:
-        embi = em_spreads["EMBI Global"].dropna()
-        embi_val = _last(embi)
-        ind["embi"]               = embi_val
-        ind["embi_prev"]          = _prev(embi)
-        ind["embi_1m_chg"]        = _chg(embi, n=1)
-        ind["em_spreads_widening"] = bool(embi_val > ind["embi_prev"])
-        ind["em_regime"]          = (
-            "crisis" if embi_val > THRESH["em_spread_crisis"] else
-            "stress" if embi_val > THRESH["em_spread_stress"] else "normal"
-        )
-    if not em_spreads.empty and "Africa Composite" in em_spreads.columns:
-        ind["africa_spreads"] = _last(em_spreads["Africa Composite"].dropna())
-
-    # ── FX reserves adequacy ──────────────────────────────────────────────────
-    if not fx_reserves.empty and len(fx_reserves) >= 2:
-        chgs = fx_reserves.iloc[-1] / fx_reserves.iloc[-2] - 1
-        ind["fx_res_min_chg"]        = float(chgs.min())
-        ind["fx_res_worst_country"]  = str(chgs.idxmin())
-        ind["fx_res_deteriorating"]  = bool((chgs < -0.05).any())
-        ind["fx_res_latest"]         = fx_reserves.iloc[-1].to_dict()
-
-    # ── USD debt vulnerability proxy ──────────────────────────────────────────
-    # If FX reserves declining AND dollar regime strong → elevated vulnerability
-    dol_rg = ind.get("dollar_regime", "neutral")
-    fx_det = ind.get("fx_res_deteriorating", False)
-    ind["usd_debt_vulnerability"] = (
-        "high"   if dol_rg in ("strong", "very_strong") and fx_det else
-        "medium" if dol_rg in ("strong", "very_strong") or fx_det else "low"
+    gold = _last(mkt.get("gold") if mkt is not None else None)
+    out["gold"] = gold
+    gold_1m = _chg(mkt.get("gold") if mkt is not None else None, 22)
+    out["gold_1m_chg"] = gold_1m
+    out["gold_regime"] = (
+        "surging" if (not _nan(gold_1m) and gold_1m > 0.07) else
+        "rising"  if (not _nan(gold_1m) and gold_1m > 0.03) else
+        "stable"  if not _nan(gold_1m) else "unknown"
     )
 
-    # ── EM FX stress ─────────────────────────────────────────────────────────
-    em_fx = [c for c in ["usdbrl", "usdzar", "usdtry", "usdcnh"] if c in mkt.columns]
-    if em_fx:
-        avg_em_fx_chg = float(np.nanmean([_chg(mkt[c]) for c in em_fx]))
-        ind["em_fx_avg_depreciation"] = avg_em_fx_chg
-        ind["em_fx_stress"] = bool(avg_em_fx_chg > 0.03)
-
-    # ── EMB ETF (market-implied EM stress) ────────────────────────────────────
-    if "emb" in mkt.columns:
-        ind["emb_1m_chg"] = _chg(mkt["emb"])
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MARKET-IMPLIED indicators
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _market_implied(ind: dict, mkt: pd.DataFrame, fred: dict):
-    # ── VIX ──────────────────────────────────────────────────────────────────
-    if "vix" in mkt.columns:
-        vix_s = mkt["vix"].dropna()
-        v = _last(vix_s)
-        ind["vix"]         = v
-        ind["vix_1m_chg"]  = _chg(vix_s)
-        ind["vix_ma20"]    = float(vix_s.tail(20).mean()) if len(vix_s) >= 20 else v
-        ind["vix_regime"]  = (
-            "high"     if v >= THRESH["vix_high"]     else
-            "elevated" if v >= THRESH["vix_elevated"] else "normal"
-        )
-        # VIX term structure proxy: spot VIX vs 20d MA (backwardation if spot > MA)
-        ind["vix_term_structure"] = (
-            "backwardation" if v > ind.get("vix_ma20", v) * 1.05 else
-            "contango"      if v < ind.get("vix_ma20", v) * 0.95 else "flat"
-        )
-
-    # ── Cross-asset correlation regime ────────────────────────────────────────
-    if "spx" in mkt.columns and "us10y" in mkt.columns:
-        spx_r  = mkt["spx"].dropna().pct_change().dropna()
-        y10_r  = mkt["us10y"].dropna().diff().dropna()
-        corr   = _roll_corr(spx_r, y10_r, n=60)
-        ind["equity_bond_corr"] = corr
-        # Positive equity-bond correlation = stress regime (both sell off)
-        ind["correlation_regime"] = (
-            "stress" if not np.isnan(corr) and corr > 0.2 else
-            "normal" if not np.isnan(corr) and corr < -0.2 else "mixed"
-        )
-
-    if "gold" in mkt.columns and "dxy" in mkt.columns:
-        gold_r = mkt["gold"].dropna().pct_change().dropna()
-        dxy_r  = mkt["dxy"].dropna().pct_change().dropna()
-        ind["gold_dxy_corr"] = _roll_corr(gold_r, dxy_r, n=60)
-        # When gold and DXY both rise → flight to ALL safe havens = systemic stress
-        gold_chg = _chg(mkt["gold"])
-        dxy_chg  = _chg(mkt["dxy"])
-        ind["systemic_stress_signal"] = bool(
-            not (np.isnan(gold_chg) or np.isnan(dxy_chg)) and gold_chg > 0.03 and dxy_chg > 0.01
-        )
-
-    # ── MOVE proxy (bond vol): rolling std of 10Y yield daily changes ─────────
-    if "us10y" in mkt.columns:
-        y10 = mkt["us10y"].dropna()
-        if len(y10) >= 22:
-            move_proxy = float(y10.diff().dropna().tail(22).std() * np.sqrt(252) * 100)
-            ind["move_proxy"]         = move_proxy
-            ind["move_regime"]        = "elevated" if move_proxy > 90 else "normal"
-
-    # ── Credit spread signals ─────────────────────────────────────────────────
-    hy = ind.get("hy_spread", np.nan)
-    if not np.isnan(hy):
-        ind["hy_regime"] = (
-            "crisis" if hy > THRESH["hy_crisis"] else
-            "stress" if hy > THRESH["hy_stress"] else "normal"
-        )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# COMPOSITE stress scores
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _composites(ind: dict):
-    ind["financial_stress_score"] = int(sum([
-        ind.get("vix_regime")       in ("elevated", "high"),
-        ind.get("dollar_regime")    in ("strong", "very_strong"),
-        ind.get("em_regime")        in ("stress", "crisis"),
-        ind.get("curve_regime")     == "inverted",
-        ind.get("fin_cond_regime")  == "tightening",
-        ind.get("hy_regime", "")    in ("stress", "crisis"),
-        ind.get("correlation_regime") == "stress",
-    ]))
-    ind["total_stress_score"] = (
-        ind["financial_stress_score"] + ind.get("geo_stress_score", 0)
-    )
-    # Overall macro regime label
-    total = ind["total_stress_score"]
-    ind["macro_regime"] = (
-        "crisis"   if total >= 7 else
-        "stressed" if total >= 4 else
-        "cautious" if total >= 2 else "benign"
+    # Systemic stress: gold and USD both rising
+    out["systemic_stress_signal"] = (
+        out["gold_regime"] in ("rising","surging") and
+        out["dollar_regime"] in ("strong","very_strong")
+        if "dollar_regime" in out else False
     )
 
+    # Copper / Gold ratio (growth vs safety)
+    if not (_nan(copper) or _nan(gold)) and gold > 0:
+        cg = copper / gold * 100
+        out["copper_gold_ratio"] = cg
+        cg_1m = (
+            (float(mkt["copper"].dropna().iloc[-1]) /
+             float(mkt["gold"].dropna().iloc[-1])) /
+            (float(mkt["copper"].dropna().iloc[-22]) /
+             float(mkt["gold"].dropna().iloc[-22])) - 1
+            if mkt and len(mkt.get("copper", pd.Series())) >= 22
+               and len(mkt.get("gold", pd.Series())) >= 22
+            else np.nan
+        )
+        out["copper_gold_regime"] = (
+            "risk_on" if (not _nan(cg_1m) and cg_1m > 0.03) else
+            "risk_off" if (not _nan(cg_1m) and cg_1m < -0.03) else "neutral"
+        )
+    else:
+        out["copper_gold_ratio"] = np.nan
+        out["copper_gold_regime"] = "unknown"
+
+    # ── Natural gas (US futures) ──────────────────────────────────────────────
+    natgas = _last(mkt.get("natgas") if mkt is not None else None)
+    out["natgas"] = natgas
+    out["natgas_1m_chg"] = _chg(mkt.get("natgas") if mkt is not None else None, 22)
+
+    # ── EU gas storage ────────────────────────────────────────────────────────
+    if eu_gas is not None and not eu_gas.empty and "full_pct" in eu_gas.columns:
+        pct_full = float(eu_gas["full_pct"].dropna().iloc[-1])
+        out["eu_gas_storage_pct"] = pct_full
+        out["eu_gas_storage_regime"] = (
+            "crisis"       if pct_full < THRESH["eu_gas_storage_crisis"] else
+            "stress"       if pct_full < THRESH["eu_gas_storage_low"] else
+            "comfortable"  if pct_full > THRESH["eu_gas_storage_high"] else
+            "normal"
+        )
+        # Seasonal: compare to 3-week prior
+        if len(eu_gas) >= 21:
+            trend = pct_full - float(eu_gas["full_pct"].dropna().iloc[-21])
+            out["eu_gas_storage_trend"] = trend  # positive = filling, negative = drawing
+        else:
+            out["eu_gas_storage_trend"] = np.nan
+    else:
+        out["eu_gas_storage_pct"]    = np.nan
+        out["eu_gas_storage_regime"] = "unknown"
+        out["eu_gas_storage_trend"]  = np.nan
+
+    # ── US gas storage ────────────────────────────────────────────────────────
+    if us_gas is not None and not us_gas.empty and len(us_gas) >= 52:
+        last_us = float(us_gas.iloc[-1])
+        avg_5y_us = float(us_gas.iloc[-260:].mean()) if len(us_gas) >= 260 else np.nan
+        out["us_gas_storage_last"] = last_us
+        out["us_gas_storage_dev"]  = (
+            (last_us - avg_5y_us) / avg_5y_us if not _nan(avg_5y_us) and avg_5y_us > 0 else np.nan
+        )
+    else:
+        out["us_gas_storage_last"] = np.nan
+        out["us_gas_storage_dev"]  = np.nan
+
+    # ── Agricultural (FAO + FRED futures) ─────────────────────────────────────
+    fpi = _last(fao_fpi)
+    out["fao_fpi"] = fpi
+    if not _nan(fpi):
+        out["fao_fpi_regime"] = (
+            "crisis" if fpi > THRESH["fao_fpi_crisis"] else
+            "stress" if fpi > THRESH["fao_fpi_stress"] else "normal"
+        )
+        # 3M change
+        fao_3m = _chg(fao_fpi, 3)
+        out["fao_fpi_3m_chg"] = fao_3m
+    else:
+        out["fao_fpi_regime"]  = "unknown"
+        out["fao_fpi_3m_chg"]  = np.nan
+
+    # Wheat, corn, rice from yfinance futures
+    wheat = _last(mkt.get("wheat") if mkt is not None else None)
+    corn  = _last(mkt.get("corn")  if mkt is not None else None)
+    out["wheat"] = wheat
+    out["corn"]  = corn
+    out["wheat_1m_chg"] = _chg(mkt.get("wheat") if mkt is not None else None, 22)
+    out["corn_1m_chg"]  = _chg(mkt.get("corn")  if mkt is not None else None, 22)
+
+    # Agricultural stress composite (FPI + wheat + corn)
+    stress_signals = 0
+    if not _nan(fpi) and fpi > THRESH["fao_fpi_stress"]:
+        stress_signals += 1
+    if not _nan(out.get("wheat_1m_chg")) and out["wheat_1m_chg"] > 0.08:
+        stress_signals += 1
+    if not _nan(out.get("corn_1m_chg")) and out["corn_1m_chg"] > 0.08:
+        stress_signals += 1
+    out["agri_stress_score"]  = stress_signals
+    out["agri_stress_regime"] = "crisis" if stress_signals >= 3 else \
+                                "stress" if stress_signals >= 2 else \
+                                "warning" if stress_signals == 1 else "normal"
+
+    # Nickel (critical minerals proxy — available via yfinance)
+    nickel = _last(mkt.get("nickel") if mkt is not None else None)
+    out["nickel"] = nickel
+    out["nickel_1m_chg"] = _chg(mkt.get("nickel") if mkt is not None else None, 22)
+
+    return out
+
+
+def _em_africa(fx_reserves: pd.DataFrame | None,
+               fdi: pd.DataFrame | None,
+               ext_debt: pd.DataFrame | None,
+               mkt: dict | None) -> dict:
+    """EM and Africa stress indicators from real data."""
+    out = {}
+
+    # ── FX reserves (World Bank) ──────────────────────────────────────────────
+    if fx_reserves is not None and not fx_reserves.empty:
+        out["fx_res_available"] = True
+        # Most recent values
+        latest = fx_reserves.dropna(how="all").iloc[-1] if not fx_reserves.empty else pd.Series()
+        out["fx_res_latest"] = latest.to_dict()
+        # Deterioration: compare last 2 available years
+        if len(fx_reserves) >= 2:
+            prev  = fx_reserves.dropna(how="all").iloc[-2]
+            chg   = ((latest - prev) / prev.abs()).replace([np.inf, -np.inf], np.nan)
+            worst = chg.idxmin() if not chg.empty else ""
+            out["fx_res_deteriorating"] = bool((chg < -0.10).any())
+            out["fx_res_worst_country"] = str(worst)
+        else:
+            out["fx_res_deteriorating"] = False
+            out["fx_res_worst_country"] = ""
+    else:
+        out["fx_res_available"]      = False
+        out["fx_res_latest"]         = {}
+        out["fx_res_deteriorating"]  = False
+        out["fx_res_worst_country"]  = ""
+
+    # USD debt vulnerability (external debt / GDP direction from WB)
+    if ext_debt is not None and not ext_debt.empty:
+        out["ext_debt_available"] = True
+        # Most recent row — check if any EM had >40% external debt to GDP (proxy)
+        latest_debt = ext_debt.dropna(how="all").iloc[-1]
+        out["ext_debt_latest"] = latest_debt.to_dict()
+    else:
+        out["ext_debt_available"]  = False
+        out["ext_debt_latest"]     = {}
+
+    # EM FX performance (from yfinance)
+    em_fx = {
+        "BRL": mkt.get("usdbrl") if mkt else None,
+        "ZAR": mkt.get("usdzar") if mkt else None,
+        "TRY": mkt.get("usdtry") if mkt else None,
+        "CNH": mkt.get("usdcnh") if mkt else None,
+        "INR": mkt.get("usdinr") if mkt else None,
+        "MXN": mkt.get("usdmxn") if mkt else None,
+    }
+    depreciations = {}
+    for ccy, s in em_fx.items():
+        chg = _chg(s, 22)
+        if not _nan(chg):
+            depreciations[ccy] = chg  # positive = USD appreciated = EM depreciated
+    out["em_fx_1m_depreciation"] = depreciations
+    out["em_fx_stress_avg"] = float(np.mean(list(depreciations.values()))) if depreciations else np.nan
+
+    # EM equity stress (EEM 1M return)
+    eem_chg = _chg(mkt.get("eem") if mkt is not None else None, 22)
+    out["eem_1m_chg"] = eem_chg
+    out["em_equity_regime"] = (
+        "crisis"  if (not _nan(eem_chg) and eem_chg < -0.15) else
+        "stress"  if (not _nan(eem_chg) and eem_chg < -0.08) else
+        "normal"  if not _nan(eem_chg) else "unknown"
+    )
+
+    # USD vulnerability composite
+    dollar_rg = "unknown"  # will be filled from macro block
+    score = 0
+    if out["fx_res_deteriorating"]:
+        score += 1
+    if not _nan(out["em_fx_stress_avg"]) and out["em_fx_stress_avg"] > 0.03:
+        score += 1
+    if not _nan(eem_chg) and eem_chg < -0.05:
+        score += 1
+    out["em_stress_score"] = score
+    out["em_regime"] = "crisis" if score >= 3 else "stress" if score >= 2 else \
+                       "elevated" if score >= 1 else "normal"
+
+    return out
+
+
+def _market_implied(mkt: dict | None, yields: pd.DataFrame | None,
+                    fred: dict | None) -> dict:
+    """Market-implied indicators: VIX term structure, correlations, HYG."""
+    out = {}
+
+    # HYG ETF proxy for financial conditions
+    hyg_1m = _chg(mkt.get("hyg") if mkt is not None else None, 22)
+    out["hyg_1m_chg"] = hyg_1m
+    # EMB (EM bonds) as EM spread proxy
+    emb_1m = _chg(mkt.get("emb") if mkt is not None else None, 22)
+    out["emb_1m_chg"] = emb_1m
+    out["embi_proxy"]  = _last(mkt.get("emb") if mkt is not None else None)
+
+    # TIP (TIPS ETF) vs LQD (IG bonds) — real rate signal
+    tip_1m = _chg(mkt.get("tip") if mkt is not None else None, 22)
+    lqd_1m = _chg(mkt.get("lqd") if mkt is not None else None, 22)
+    out["tip_1m_chg"] = tip_1m
+    out["lqd_1m_chg"] = lqd_1m
+
+    # Sector ETF momentum (real equity data)
+    for key in ("xlf", "xle", "xlb", "xli"):
+        chg = _chg(mkt.get(key) if mkt is not None else None, 22)
+        out[f"{key}_1m_chg"] = chg
+
+    return out
+
+
+def _composites(ind: dict) -> dict:
+    """Composite stress scores and macro regime from individual indicators."""
+    out = {}
+
+    fin_stress = 0
+    if ind.get("vix_regime") in ("elevated", "high"):        fin_stress += 1
+    if ind.get("hy_regime") in ("stress", "crisis"):         fin_stress += 1
+    if ind.get("fin_cond_regime") in ("tightening","crisis"):fin_stress += 1
+    if ind.get("curve_regime") == "inverted":                fin_stress += 1
+    if ind.get("inflation_regime") in ("high","very_high"):  fin_stress += 1
+    if ind.get("correlation_regime") == "stress":            fin_stress += 1
+    if ind.get("move_regime") == "elevated":                 fin_stress += 1
+    out["financial_stress_score"] = fin_stress
+
+    geo_stress = 0
+    if ind.get("oil_regime") == "surging":                   geo_stress += 1
+    if ind.get("eu_gas_storage_regime") in ("stress","crisis"):geo_stress += 1
+    if ind.get("oil_inventory_regime") == "stress":          geo_stress += 1
+    if ind.get("agri_stress_regime") in ("stress","crisis"): geo_stress += 1
+    out["geo_stress_score"] = geo_stress
+
+    total = fin_stress + geo_stress
+    out["total_stress_score"] = total
+    out["macro_regime"] = (
+        "crisis"   if total >= 8 else
+        "stressed" if total >= 5 else
+        "cautious" if total >= 3 else
+        "benign"
+    )
+
+    return out
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN
+# Main entry point
 # ══════════════════════════════════════════════════════════════════════════════
 
 def compute_all(
-    mkt:         pd.DataFrame,
-    yields:      pd.DataFrame,
-    fred:        dict,
-    gpr:         pd.Series,
-    ship:        pd.Series,
-    sanctions:   pd.Series,
-    cyber:       pd.Series,
-    em_spreads:  pd.DataFrame,
-    fx_reserves: pd.DataFrame,
-    minerals:    pd.DataFrame,
+    mkt:          dict | None,
+    yields:       pd.DataFrame | None,
+    fred:         dict | None,
+    oil_inv:      pd.Series | None   = None,
+    eu_gas:       pd.DataFrame | None = None,
+    us_gas:       pd.Series | None   = None,
+    fao_fpi:      pd.Series | None   = None,
+    fx_reserves:  pd.DataFrame | None = None,
+    fdi:          pd.DataFrame | None = None,
+    ext_debt:     pd.DataFrame | None = None,
+    oecd_cli:     pd.DataFrame | None = None,
 ) -> dict:
     """
-    Compute all indicators from raw data.
-    Returns flat dict — all keys documented inline above.
+    Compute all regime indicators from real data.
+    Any unavailable data results in np.nan / 'unknown' — never synthetic values.
     """
     ind: dict = {}
 
-    _macro(ind, mkt, yields, fred)
-    _georisk(ind, gpr, ship, sanctions, cyber)
-    _commodities(ind, mkt, minerals)
-    _em_africa(ind, mkt, em_spreads, fx_reserves)
-    _market_implied(ind, mkt, fred)
-    _composites(ind)
+    ind.update(_macro(mkt, yields, fred))
 
+    # Systemic stress needs dollar_regime from macro block
+    comm = _commodities(mkt, fred, oil_inv, eu_gas, us_gas, fao_fpi)
+    # Fix systemic_stress_signal reference
+    comm["systemic_stress_signal"] = (
+        comm.get("gold_regime") in ("rising", "surging") and
+        ind.get("dollar_regime") in ("strong", "very_strong")
+    )
+    ind.update(comm)
+
+    ind.update(_em_africa(fx_reserves, fdi, ext_debt, mkt))
+    ind.update(_market_implied(mkt, yields, fred))
+
+    # OECD CLI
+    if oecd_cli is not None and not oecd_cli.empty:
+        latest_cli = oecd_cli.dropna(how="all").iloc[-1]
+        ind["oecd_cli_latest"] = latest_cli.to_dict()
+        # OECDALL or USA as headline
+        for col in ("OECDALL", "USA", "US"):
+            if col in latest_cli.index:
+                v = float(latest_cli[col])
+                ind["oecd_cli_oecdall"] = v
+                ind["oecd_cli_regime"]  = (
+                    "expanding"    if v > 100.5 else
+                    "contracting"  if v < 99.5  else "neutral"
+                )
+                break
+    else:
+        ind["oecd_cli_oecdall"] = np.nan
+        ind["oecd_cli_regime"]  = "unknown"
+
+    ind.update(_composites(ind))
     return ind
