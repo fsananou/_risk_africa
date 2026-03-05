@@ -371,7 +371,7 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("FX & Dollar Regime")
 
-    dxy_series = mkt.get("dxy") if mkt else None
+    dxy_series = mkt.get("dxy") if mkt is not None else None
     if dxy_series is not None and not dxy_series.empty:
         fig_dxy = go.Figure()
         fig_dxy.add_trace(go.Scatter(x=dxy_series.index, y=dxy_series, name="DXY",
@@ -391,7 +391,7 @@ with tabs[2]:
     }
     fx_rows = []
     for label, key in fx_pairs.items():
-        series = mkt.get(key) if mkt else None
+        series = mkt.get(key) if mkt is not None else None
         if series is not None and len(series) >= 22:
             last   = series.iloc[-1]
             chg_1m = last / series.iloc[-22] - 1
@@ -441,7 +441,7 @@ with tabs[3]:
     }
     col_charts = st.columns(2)
     for idx, (label, key) in enumerate(comm_map.items()):
-        series = mkt.get(key) if mkt else None
+        series = mkt.get(key) if mkt is not None else None
         if series is None or series.empty:
             continue
         fig = go.Figure()
@@ -611,8 +611,8 @@ with tabs[5]:
         "Historically marks stagflationary or acute stress periods."
     )
 
-    eem = mkt.get("eem") if mkt else None
-    emb = mkt.get("emb") if mkt else None
+    eem = mkt.get("eem") if mkt is not None else None
+    emb = mkt.get("emb") if mkt is not None else None
     if eem is not None and emb is not None and not eem.empty and not emb.empty:
         fig_cross = go.Figure()
         fig_cross.add_trace(go.Scatter(
