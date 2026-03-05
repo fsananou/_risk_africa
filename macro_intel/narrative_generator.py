@@ -284,7 +284,7 @@ def generate(
 
     # Collect real data sources
     data_sources = list({s for i in inferences for s in i.get("data_sources",[]) if s})
-    data_sources += list({s for r in rules if "FRED" in r.get("headline","") or "yfinance" in r.get("headline","")})
+    data_sources += [s for s in ("FRED", "yfinance") if any(s in r.get("headline","") for r in rules)]
 
     footer = (
         f"Macro Intelligence Briefing — {as_of_str} | "
