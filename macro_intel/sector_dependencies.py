@@ -22,7 +22,17 @@ from __future__ import annotations
 
 import numpy as np
 
-from config import LEVEL_ORDER, SECTOR_ICON
+try:
+    from config import SECTOR_ICON
+except ImportError:
+    SECTOR_ICON = {
+        "Energy":           "⚡",
+        "Agriculture":      "🌾",
+        "Chemicals":        "🧪",
+        "Industrials":      "🏭",
+        "Technology":       "💻",
+        "Critical Minerals":"⛏️",
+    }
 
 
 def _nan(v) -> bool:
