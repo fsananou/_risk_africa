@@ -1,687 +1,657 @@
 """
-app.py — Global Macro Intelligence Dashboard.
+app.py — Macro Intelligence Dashboard
+======================================
+Streamlit application wiring together all modules:
+  data_fetchers → indicators → rules_engine → inference_engine → narrative_generator
 
-Architecture:
-  data_fetchers  →  indicators  →  rules_engine  →  Streamlit UI
-
-Run:  streamlit run app.py
+Run:
+    streamlit run macro_intel/app.py
+    # or from repo root:
+    streamlit run macro_intel/app.py --server.port 8501
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+import datetime
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-import data_fetchers as df_
-import indicators as ind_
-import rules_engine as re_
-from config import LEVEL_BG, LEVEL_COLOR, LEVEL_ICON, LINE_COLORS
+import config as cfg
+import data_fetchers as df_mod
+import indicators as ind_mod
+import inference_engine as inf_eng
+import narrative_generator as narr
+import rules_engine as rules_eng
 
-# ── Page config ────────────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Macro Intel",
+    page_title="Macro Intelligence — Africa & EM",
+    page_icon="🌍",
     layout="wide",
-    initial_sidebar_state="collapsed",
-    menu_items={"Get help": None, "Report a bug": None, "About": None},
+    initial_sidebar_state="expanded",
 )
 
-# ── CSS ────────────────────────────────────────────────────────────────────────
+# ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  .block-container { padding: 0.6rem 1.8rem 2rem; }
-  .section-label {
-    font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em;
-    color: #aaa; font-weight: 700; border-bottom: 1px solid #e8e8e8;
-    padding-bottom: 3px; margin: 10px 0 8px;
-  }
-  div[data-testid="metric-container"] {
-    background: #f7f7f7; border-radius: 3px; padding: 6px 10px;
-  }
-  .insight-card {
-    border-left: 4px solid #ddd; padding: 10px 14px;
-    border-radius: 3px; margin-bottom: 8px;
-  }
-  .insight-badge {
-    display: inline-block; font-size: 0.62rem; font-weight: 700;
-    letter-spacing: 0.06em; padding: 2px 7px; border-radius: 2px;
-    color: white; margin-right: 6px; text-transform: uppercase;
-  }
-  .insight-cat  { font-size: 0.68rem; color: #999; }
-  .insight-head { font-size: 0.92rem; font-weight: 600; margin: 4px 0; }
-  .insight-detail { font-size: 0.81rem; color: #444; line-height: 1.55; }
-  .insight-watch { font-size: 0.71rem; color: #999; margin-top: 5px; }
-  .stress-pill {
-    display: inline-block; padding: 3px 10px; border-radius: 12px;
-    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
-  }
-  .dtab { width:100%; font-size:0.81rem; border-collapse:collapse; font-family:monospace; }
-  .dtab th { color:#bbb; font-size:0.6rem; text-transform:uppercase;
-             letter-spacing:0.07em; font-weight:600; padding:2px 6px; }
-  .dtab td { padding: 4px 6px; border-bottom: 1px solid #f4f4f4; }
-  .up   { color: #1e7e34 !important; font-weight: 600; }
-  .down { color: #c0392b !important; font-weight: 600; }
+  .insight-alert   { background:#fdf3f2; border-left:4px solid #c0392b; padding:10px 14px; border-radius:6px; margin:6px 0; }
+  .insight-warning { background:#fef9f0; border-left:4px solid #d35400; padding:10px 14px; border-radius:6px; margin:6px 0; }
+  .insight-info    { background:#f0f7fd; border-left:4px solid #2980b9; padding:10px 14px; border-radius:6px; margin:6px 0; }
+  .inference-high   { background:#fdf3f2; border-left:4px solid #c0392b; padding:8px 12px; border-radius:4px; margin:4px 0; }
+  .inference-medium { background:#fef9f0; border-left:4px solid #d35400; padding:8px 12px; border-radius:4px; margin:4px 0; }
+  .inference-low    { background:#f4f4f4; border-left:4px solid #7f8c8d; padding:8px 12px; border-radius:4px; margin:4px 0; }
+  .source-badge { display:inline-block; padding:2px 8px; border-radius:12px; font-size:0.72rem; font-weight:600; margin:2px; }
+  .source-live  { background:#d5f5e3; color:#1a5e2a; }
+  .source-mock  { background:#fdebd0; color:#7d4b0a; }
+  .regime-crisis   { background:#fdf3f2; color:#c0392b; padding:8px 14px; border-radius:6px; font-weight:700; }
+  .regime-stressed { background:#fef9f0; color:#d35400; padding:8px 14px; border-radius:6px; font-weight:700; }
+  .regime-cautious { background:#fefdf0; color:#b7950b; padding:8px 14px; border-radius:6px; font-weight:700; }
+  .regime-benign   { background:#eafaf1; color:#1a5e2a; padding:8px 14px; border-radius:6px; font-weight:700; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Chart helpers ──────────────────────────────────────────────────────────────
-_LAYOUT = dict(
-    plot_bgcolor="white", paper_bgcolor="white",
-    font=dict(family="monospace", size=10, color="#333"),
-    margin=dict(l=42, r=8, t=24, b=28),
-    xaxis=dict(gridcolor="#f0f0f0", linecolor="#ddd"),
-    yaxis=dict(gridcolor="#f0f0f0", linecolor="#ddd"),
-    legend=dict(font=dict(size=9), bgcolor="rgba(0,0,0,0)",
-                orientation="h", y=-0.20),
-    height=240, hovermode="x unified",
+def _nan(v) -> bool:
+    return v is None or (isinstance(v, float) and np.isnan(float(v)))
+
+
+def _source_badge(label: str) -> str:
+    is_mock = "synthetic" in label.lower() or "mock" in label.lower()
+    css = "source-mock" if is_mock else "source-live"
+    return f'<span class="source-badge {css}">{label}</span>'
+
+
+def _regime_html(regime: str) -> str:
+    emoji = {"crisis": "🔴", "stressed": "🟠", "cautious": "🟡", "benign": "🟢"}.get(regime, "⚪")
+    return f'<div class="regime-{regime}">{emoji} Macro Regime: <b>{regime.upper()}</b></div>'
+
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.title("⚙️ Controls")
+    refresh_btn = st.button("🔄 Refresh Data", use_container_width=True)
+    if refresh_btn:
+        st.cache_data.clear()
+        st.rerun()
+
+    st.divider()
+    st.caption("**FRED API Key** (optional)")
+    fred_key_input = st.text_input(
+        "FRED Key", value="", type="password",
+        placeholder="Leave blank to use env/secrets",
+        label_visibility="collapsed",
+    )
+    if fred_key_input:
+        import os
+        os.environ["FRED_API_KEY"] = fred_key_input
+
+    st.divider()
+    show_inference = st.toggle("Forward-Looking Inference", value=True)
+    show_narrative = st.toggle("Weekly Narrative Note",     value=True)
+    show_raw       = st.toggle("Raw Indicator Values",      value=False)
+
+    st.divider()
+    st.caption("**Africa Focus Countries**")
+    africa_focus = st.multiselect(
+        "Countries (ISO3)", options=cfg.WB_AFRICA,
+        default=["NGA", "KEN", "EGY", "GHA", "ZAF"],
+        label_visibility="collapsed",
+    )
+
+    st.divider()
+    st.caption(f"As of: {datetime.date.today().strftime('%d %b %Y')}")
+    st.caption("Data: FRED · World Bank · IMF · Yahoo Finance")
+
+
+# ── Data loading ──────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=900)
+def load_market():
+    return df_mod.get_market_data()
+
+@st.cache_data(ttl=3600)
+def load_yields():
+    return df_mod.get_yields()
+
+@st.cache_data(ttl=3600)
+def load_fred():
+    return df_mod.get_fred_macro()
+
+@st.cache_data(ttl=86400)
+def load_gpr():
+    return df_mod.get_gpr()
+
+@st.cache_data(ttl=3600)
+def load_shipping():
+    return df_mod.get_shipping()
+
+@st.cache_data(ttl=3600)
+def load_em_spreads():
+    return df_mod.get_em_spreads()
+
+@st.cache_data(ttl=86400)
+def load_wb_reserves():
+    return df_mod.get_worldbank_reserves()
+
+@st.cache_data(ttl=86400)
+def load_wb_fdi():
+    return df_mod.get_worldbank_fdi()
+
+@st.cache_data(ttl=86400)
+def load_imf():
+    return df_mod.get_imf_macro()
+
+@st.cache_data(ttl=3600)
+def load_sanctions():
+    return df_mod.get_sanctions_intensity()
+
+@st.cache_data(ttl=3600)
+def load_cyber():
+    return df_mod.get_cyber_risk()
+
+@st.cache_data(ttl=86400)
+def load_minerals():
+    return df_mod.get_critical_minerals()
+
+
+# ── Load all data ─────────────────────────────────────────────────────────────
+with st.spinner("Loading macro data…"):
+    mkt,        mkt_src  = load_market()
+    yields,     yld_src  = load_yields()
+    fred,       fred_src = load_fred()
+    gpr_df,     gpr_src  = load_gpr()
+    ship_df,    ship_src = load_shipping()
+    em_spreads, em_src   = load_em_spreads()
+    fx_res,     fx_src   = load_wb_reserves()
+    fdi_df,     fdi_src  = load_wb_fdi()
+    imf_df,     imf_src  = load_imf()
+    sanctions,  san_src  = load_sanctions()
+    cyber,      cyb_src  = load_cyber()
+    minerals,   min_src  = load_minerals()
+
+ind = ind_mod.compute_all(
+    mkt=mkt, yields=yields, fred=fred,
+    gpr=gpr_df, ship=ship_df, sanctions=sanctions, cyber=cyber,
+    em_spreads=em_spreads, fx_reserves=fx_res, minerals=minerals,
 )
+ind.update({
+    "curve_source": yld_src, "vix_source": mkt_src, "dxy_source": mkt_src,
+    "oil_source": mkt_src, "copper_source": mkt_src,
+    "gpr_source": gpr_src, "em_spread_source": em_src, "fx_res_source": fx_src,
+})
 
-YIELD_MAP = {
-    "1 Mo": 1/12, "2 Mo": 2/12, "3 Mo": 3/12, "4 Mo": 4/12,
-    "6 Mo": 6/12, "1 Yr": 1, "2 Yr": 2, "3 Yr": 3, "5 Yr": 5,
-    "7 Yr": 7, "10 Yr": 10, "20 Yr": 20, "30 Yr": 30,
-}
+rules      = rules_eng.run(ind)
+inferences = inf_eng.run(ind, rules)
+note       = narr.generate(ind, rules, inferences)
 
 
-def lfig(df: pd.DataFrame, title: str = "", norm: bool = False,
-         height: int = 240, yaxis_title: str = "") -> go.Figure:
-    fig = go.Figure()
-    for i, col in enumerate(df.columns):
-        s = df[col].dropna()
-        y = (s / s.iloc[0] * 100) if norm and len(s) > 0 else s
-        fig.add_trace(go.Scatter(
-            x=s.index, y=y, name=col,
-            line=dict(width=1.5, color=LINE_COLORS[i % len(LINE_COLORS)]),
-            mode="lines",
+# ── Header ────────────────────────────────────────────────────────────────────
+col_title, col_regime = st.columns([3, 1])
+with col_title:
+    st.title("🌍 Macro Intelligence — Africa & EM")
+    st.caption("Forward-looking macro risk · Global indicators · Africa sovereign analysis")
+with col_regime:
+    st.markdown(_regime_html(ind.get("macro_regime", "benign")), unsafe_allow_html=True)
+    st.caption(
+        f"Financial stress: **{ind.get('financial_stress_score', 0)}/7** · "
+        f"Geo-risk: **{ind.get('geo_stress_score', 0)}/4**"
+    )
+
+all_sources = {mkt_src, yld_src, fred_src, gpr_src, em_src, fx_src}
+badges_html = " ".join(_source_badge(s) for s in sorted(all_sources) if s)
+st.markdown(f"**Data:** {badges_html}", unsafe_allow_html=True)
+st.divider()
+
+
+# ── Pulse bar (KPIs) ──────────────────────────────────────────────────────────
+def _metric_col(col, label, val, fmt=".1f", suffix=""):
+    v_str = f"{val:{fmt}}{suffix}" if not _nan(val) else "N/A"
+    col.metric(label, v_str)
+
+
+kpi = st.columns(8)
+_metric_col(kpi[0], "VIX",       ind.get("vix",          np.nan))
+_metric_col(kpi[1], "DXY",       ind.get("dxy",          np.nan))
+_metric_col(kpi[2], "Curve",     ind.get("curve_slope",  np.nan), fmt="+.0f", suffix=" bps")
+_metric_col(kpi[3], "EMBI",      ind.get("embi",         np.nan), fmt=".0f",  suffix=" bps")
+_metric_col(kpi[4], "HY Spread", ind.get("hy_spread",    np.nan), fmt=".0f",  suffix=" bps")
+oil_chg = ind.get("oil_1m_chg", np.nan)
+cu_chg  = ind.get("copper_1m_chg", np.nan)
+gd_chg  = ind.get("gold_1m_chg", np.nan)
+_metric_col(kpi[5], "Oil 1M",    oil_chg * 100 if not _nan(oil_chg) else np.nan, fmt="+.1f", suffix="%")
+_metric_col(kpi[6], "Copper 1M", cu_chg  * 100 if not _nan(cu_chg)  else np.nan, fmt="+.1f", suffix="%")
+_metric_col(kpi[7], "Gold 1M",   gd_chg  * 100 if not _nan(gd_chg)  else np.nan, fmt="+.1f", suffix="%")
+st.divider()
+
+
+# ── Tabs ──────────────────────────────────────────────────────────────────────
+tabs = st.tabs([
+    "🚨 Signals",
+    "📈 Rates & Curves",
+    "💵 FX & Dollar",
+    "🛢️ Commodities",
+    "🌍 EM & Africa",
+    "🔮 Inference",
+    "📰 Weekly Note",
+])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — SIGNALS
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[0]:
+    st.subheader("Cross-Asset Signals")
+
+    for r in rules:
+        lvl = r["level"]
+        icon = cfg.LEVEL_ICON.get(lvl, "")
+        with st.container():
+            st.markdown(
+                f'<div class="insight-{lvl}">'
+                f'<b>{icon} [{lvl.upper()}] {r["category"]}</b>: {r["headline"]}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            with st.expander("Detail & watch items"):
+                st.write(r["detail"])
+                st.markdown("**Watch:**")
+                for w in r.get("watch", []):
+                    st.markdown(f"- {w}")
+
+    if not rules:
+        st.success("No stress signals detected.")
+
+    st.divider()
+    col_fs, col_gs = st.columns(2)
+    with col_fs:
+        fin_score = ind.get("financial_stress_score", 0)
+        st.markdown("**Financial Stress Score**")
+        st.progress(fin_score / 7, text=f"{fin_score}/7 indicators elevated")
+
+    with col_gs:
+        geo_score = ind.get("geo_stress_score", 0)
+        st.markdown("**Geopolitical Stress Score**")
+        st.progress(geo_score / 4, text=f"{geo_score}/4 indicators elevated")
+
+    if show_raw:
+        st.divider()
+        st.subheader("Raw Indicator Values")
+        st.dataframe(
+            pd.DataFrame([{"Indicator": k, "Value": str(v)} for k, v in sorted(ind.items())]),
+            use_container_width=True, height=400,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — RATES & CURVES
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[1]:
+    st.subheader("Yield Curve & Rates")
+
+    if yields is not None and not yields.empty:
+        tenor_map = {"3M": "us3m", "2Y": "us2y", "5Y": "us5y", "10Y": "us10y", "30Y": "us30y"}
+        curve_pts = {
+            label: yields[col].dropna().iloc[-1]
+            for label, col in tenor_map.items()
+            if col in yields.columns and not yields[col].dropna().empty
+        }
+        if curve_pts:
+            slope = ind.get("curve_slope", np.nan)
+            curve_rg = ind.get("curve_regime", "")
+            title_sfx = f" — {curve_rg} ({slope:+.0f} bps)" if not _nan(slope) else ""
+            fig_curve = go.Figure()
+            fig_curve.add_trace(go.Scatter(
+                x=list(curve_pts.keys()), y=list(curve_pts.values()),
+                mode="lines+markers", line=dict(color="#2c3e50", width=3), marker=dict(size=10),
+            ))
+            fig_curve.update_layout(title=f"US Treasury Yield Curve{title_sfx}",
+                                    xaxis_title="Tenor", yaxis_title="Yield (%)", height=360)
+            st.plotly_chart(fig_curve, use_container_width=True)
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if "us10y" in yields.columns and "us2y" in yields.columns:
+                fig_ts = go.Figure()
+                fig_ts.add_trace(go.Scatter(x=yields.index, y=yields["us10y"], name="10Y", line=dict(color="#2980b9")))
+                fig_ts.add_trace(go.Scatter(x=yields.index, y=yields["us2y"],  name="2Y",  line=dict(color="#c0392b")))
+                fig_ts.update_layout(title="2Y vs 10Y Yield", yaxis_title="%", height=280)
+                st.plotly_chart(fig_ts, use_container_width=True)
+
+        with col_b:
+            if "us10y" in yields.columns and "us2y" in yields.columns:
+                spread = (yields["us10y"] - yields["us2y"]) * 100
+                fig_sp = go.Figure()
+                fig_sp.add_trace(go.Bar(
+                    x=spread.index, y=spread,
+                    marker_color=["#c0392b" if v < 0 else "#27ae60" for v in spread],
+                ))
+                fig_sp.add_hline(y=0, line_dash="dash", line_color="black")
+                fig_sp.update_layout(title="2Y–10Y Spread (bps)", yaxis_title="bps", height=280)
+                st.plotly_chart(fig_sp, use_container_width=True)
+
+    st.divider()
+    col_c, col_d = st.columns(2)
+    with col_c:
+        st.markdown("**Key Rate Indicators**")
+        tp   = ind.get("term_premium", np.nan)
+        be5  = ind.get("breakeven5y", np.nan)
+        be55 = ind.get("breakeven5y5y", np.nan)
+        st.metric("Term Premium (10Y proxy)",  f"{tp:.2f}%"  if not _nan(tp)   else "N/A")
+        st.metric("5Y Breakeven Inflation",    f"{be5:.2f}%" if not _nan(be5)  else "N/A")
+        st.metric("5Y5Y Forward Inflation",    f"{be55:.2f}%" if not _nan(be55) else "N/A")
+
+    with col_d:
+        st.markdown("**Vol & Inflation Regime**")
+        move   = ind.get("move_proxy", np.nan)
+        inf_rg = ind.get("inflation_regime", "")
+        vix_ts = ind.get("vix_term_structure", "N/A")
+        st.metric("MOVE Proxy (bond vol)",  f"{move:.0f}" if not _nan(move) else "N/A")
+        st.metric("Inflation Regime",       inf_rg.upper() if inf_rg else "N/A")
+        st.metric("VIX Term Structure",     vix_ts.upper())
+
+    if fred is not None and "nfci" in fred.columns:
+        st.divider()
+        nfci = fred["nfci"].dropna()
+        fig_nfci = go.Figure()
+        fig_nfci.add_trace(go.Bar(
+            x=nfci.index, y=nfci,
+            marker_color=["#c0392b" if v > 0.5 else "#27ae60" for v in nfci],
         ))
-    layout = {**_LAYOUT, "height": height}
-    if title:
-        layout["title"] = dict(text=title, font=dict(size=10, color="#777"))
-    if yaxis_title:
-        layout["yaxis"] = {**layout.get("yaxis", {}), "title": yaxis_title}
-    fig.update_layout(**layout)
-    return fig
+        fig_nfci.add_hline(y=0, line_dash="dash", line_color="black")
+        fig_nfci.update_layout(title="Chicago Fed NFCI (>0 = tighter conditions)", height=250)
+        st.plotly_chart(fig_nfci, use_container_width=True)
 
 
-def curve_snapshot(curve: pd.Series) -> go.Figure:
-    pts = [(YIELD_MAP[k], float(curve[k])) for k in YIELD_MAP
-           if k in curve.index and not pd.isna(curve[k])]
-    if not pts:
-        return go.Figure()
-    x, y = zip(*pts)
-    fig = go.Figure(go.Scatter(
-        x=x, y=y, mode="lines+markers",
-        line=dict(color="#2c3e50", width=2),
-        marker=dict(size=5, color="#2c3e50"),
-        hovertemplate="%{y:.2f}%<extra></extra>",
-    ))
-    fig.update_layout(**{**_LAYOUT,
-        "xaxis": dict(title="Maturity (years)",
-                      tickvals=[0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
-                      ticktext=["3M","6M","1Y","2Y","3Y","5Y","7Y","10Y","20Y","30Y"],
-                      gridcolor="#f0f0f0", linecolor="#ddd"),
-        "yaxis": dict(title="Yield (%)", gridcolor="#f0f0f0", linecolor="#ddd"),
-        "hovermode": "x", "height": 230,
-    })
-    return fig
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — FX & DOLLAR
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[2]:
+    st.subheader("FX & Dollar Regime")
 
+    dxy_series = mkt.get("dxy") if mkt else None
+    if dxy_series is not None and not dxy_series.empty:
+        fig_dxy = go.Figure()
+        fig_dxy.add_trace(go.Scatter(x=dxy_series.index, y=dxy_series, name="DXY",
+                                     line=dict(color="#2c3e50", width=2)))
+        fig_dxy.add_hline(y=cfg.THRESH["dxy_strong"],      line_dash="dot",
+                          line_color="#d35400", annotation_text="Strong")
+        fig_dxy.add_hline(y=cfg.THRESH["dxy_very_strong"], line_dash="dot",
+                          line_color="#c0392b", annotation_text="Very Strong")
+        fig_dxy.update_layout(title="US Dollar Index (DXY)", yaxis_title="Index", height=300)
+        st.plotly_chart(fig_dxy, use_container_width=True)
 
-def curve_history(hist: pd.DataFrame) -> go.Figure:
-    cols = [k for k in YIELD_MAP if k in hist.columns]
-    x_vals = [YIELD_MAP[k] for k in cols]
-    n = len(hist)
-    snaps = [(lbl, idx) for lbl, idx in
-             [("Today", -1), ("1M ago", -22), ("3M ago", -63), ("1Y ago", -252)]
-             if abs(idx) <= n]
-    clrs = ["#2c3e50", "#7f8c8d", "#aab7c4", "#d5d8dc"]
-    widths = [2.5, 1.5, 1.2, 1.0]
-    fig = go.Figure()
-    for i, (lbl, idx) in enumerate(snaps):
-        row = hist.iloc[idx]
-        y = [float(row[c]) for c in cols if not pd.isna(row.get(c, np.nan))]
-        fig.add_trace(go.Scatter(
-            x=x_vals[:len(y)], y=y, name=lbl,
-            line=dict(color=clrs[i], width=widths[i]),
-            mode="lines+markers", marker=dict(size=4),
-        ))
-    fig.update_layout(**{**_LAYOUT,
-        "xaxis": dict(title="Maturity (years)",
-                      tickvals=[0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
-                      ticktext=["3M","6M","1Y","2Y","3Y","5Y","7Y","10Y","20Y","30Y"],
-                      gridcolor="#f0f0f0", linecolor="#ddd"),
-        "yaxis": dict(title="Yield (%)", gridcolor="#f0f0f0", linecolor="#ddd"),
-        "height": 230,
-    })
-    return fig
+    # EM FX table
+    st.divider()
+    fx_pairs = {
+        "USD/BRL": "usdbrl", "USD/ZAR": "usdzar", "USD/TRY": "usdtry",
+        "USD/CNH": "usdcnh", "USD/INR": "usdinr", "USD/MXN": "usdmxn",
+    }
+    fx_rows = []
+    for label, key in fx_pairs.items():
+        series = mkt.get(key) if mkt else None
+        if series is not None and len(series) >= 22:
+            last   = series.iloc[-1]
+            chg_1m = last / series.iloc[-22] - 1
+            chg_ytd = last / series.iloc[0] - 1
+            fx_rows.append({
+                "Pair": label, "Latest": f"{last:.2f}",
+                "1M Chg": f"{chg_1m*100:+.1f}%", "YTD Chg": f"{chg_ytd*100:+.1f}%",
+            })
+    if fx_rows:
+        st.markdown("**EM FX Performance**")
+        st.dataframe(pd.DataFrame(fx_rows).set_index("Pair"), use_container_width=True)
 
-
-def _metric_row(items: list[tuple[str, str, str | None]]):
-    """Render a compact metric row. items = [(label, value, delta_str), ...]"""
-    cols = st.columns(len(items))
-    for col, (label, value, delta) in zip(cols, items):
-        col.metric(label, value, delta)
-
-
-def _fmt(v, dec=2):
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return "—"
-    if abs(v) > 10_000: return f"{v:,.0f}"
-    if abs(v) > 1_000:  return f"{v:,.1f}"
-    return f"{v:.{dec}f}"
-
-
-def _pct(v, dec=1):
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return None
-    sign = "+" if v >= 0 else ""
-    return f"{sign}{v * 100:.{dec}f}%"
-
-
-# ── Insight rendering ──────────────────────────────────────────────────────────
-def render_insight(ins: dict):
-    level  = ins["level"]
-    color  = LEVEL_COLOR[level]
-    bg     = LEVEL_BG[level]
-    icon   = LEVEL_ICON[level]
-    watch  = " &nbsp;·&nbsp; ".join(ins.get("watch", []))
-    st.markdown(f"""
-    <div class="insight-card" style="background:{bg};border-left-color:{color};">
-      <div>
-        <span class="insight-badge" style="background:{color};">{level}</span>
-        <span class="insight-cat">{ins['category']}</span>
-      </div>
-      <div class="insight-head">{icon}&nbsp;{ins['headline']}</div>
-      <div class="insight-detail">{ins['detail']}</div>
-      <div class="insight-watch"><strong>Watch:</strong> {watch}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# ── Stress gauge ───────────────────────────────────────────────────────────────
-def render_stress_gauge(total: int):
-    if total <= 1:
-        color, label = "#1e7e34", "LOW"
-    elif total <= 3:
-        color, label = "#d35400", "MODERATE"
-    elif total <= 5:
-        color, label = "#c0392b", "ELEVATED"
+    # FX Reserves
+    st.divider()
+    st.subheader("FX Reserve Coverage (World Bank)")
+    if fx_res is not None and not fx_res.empty:
+        fig_res = go.Figure()
+        for iso in (africa_focus or cfg.WB_AFRICA[:5]):
+            if iso in fx_res.columns:
+                fig_res.add_trace(go.Scatter(
+                    x=fx_res.index, y=fx_res[iso] / 1e9,
+                    mode="lines+markers", name=iso,
+                ))
+        fig_res.update_layout(title="FX Reserves (USD bn)", yaxis_title="USD bn", height=300)
+        st.plotly_chart(fig_res, use_container_width=True)
     else:
-        color, label = "#7b241c", "HIGH"
-    st.markdown(
-        f'<span class="stress-pill" style="background:{color};color:white;">'
-        f'GLOBAL STRESS: {label} ({total}/8)</span>',
-        unsafe_allow_html=True,
+        st.info("World Bank FX reserve data unavailable.")
+
+    usd_vuln = ind.get("usd_debt_vulnerability", np.nan)
+    if not _nan(usd_vuln):
+        st.metric("USD Debt Vulnerability Score (EM broad)", f"{usd_vuln:.1f}/3")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — COMMODITIES
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[3]:
+    st.subheader("Commodities & Supply Chains")
+
+    comm_map = {
+        "Brent Crude (USD/bbl)":  "brent",
+        "WTI Crude (USD/bbl)":    "wti",
+        "Copper (HG contract)":   "copper",
+        "Gold (USD/oz)":          "gold",
+        "Natural Gas":            "natgas",
+        "Wheat":                  "wheat",
+    }
+    col_charts = st.columns(2)
+    for idx, (label, key) in enumerate(comm_map.items()):
+        series = mkt.get(key) if mkt else None
+        if series is None or series.empty:
+            continue
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=series.index, y=series, name=label, line=dict(width=2)))
+        fig.update_layout(title=label, height=250, margin=dict(l=10, r=10, t=40, b=10))
+        col_charts[idx % 2].plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+    col_cg, col_ship = st.columns(2)
+    with col_cg:
+        cg_regime = ind.get("copper_gold_regime", "")
+        cg_ratio  = ind.get("copper_gold_ratio", np.nan)
+        st.markdown("**Copper / Gold Ratio** *(growth vs safety)*")
+        st.metric("Cu/Gold Regime", cg_regime.upper() if cg_regime else "N/A")
+        st.metric("Cu/Gold Ratio",  f"{cg_ratio:.2f}" if not _nan(cg_ratio) else "N/A")
+        st.caption("Rising ratio → risk-on. Falling → risk-off / fear.")
+
+    with col_ship:
+        ship_rg = ind.get("shipping_regime", "")
+        st.markdown("**Shipping / Supply Chain**")
+        st.metric("Shipping Regime", ship_rg.upper() if ship_rg else "N/A")
+        if ship_df is not None and not ship_df.empty and "bdi" in ship_df.columns:
+            fig_ship = go.Figure()
+            fig_ship.add_trace(go.Scatter(x=ship_df.index, y=ship_df["bdi"], name="BDI"))
+            fig_ship.add_hline(y=cfg.THRESH["shipping_stress"], line_dash="dot", line_color="#d35400")
+            fig_ship.add_hline(y=cfg.THRESH["shipping_crisis"], line_dash="dot", line_color="#c0392b")
+            fig_ship.update_layout(title="Baltic Dry Index", height=220)
+            st.plotly_chart(fig_ship, use_container_width=True)
+
+    st.divider()
+    st.subheader("Critical Minerals (Africa)")
+    if minerals is not None and not minerals.empty:
+        st.dataframe(minerals.tail(5), use_container_width=True)
+    else:
+        st.info("Critical minerals data unavailable.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — EM & AFRICA
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[4]:
+    st.subheader("Emerging Markets & Africa Sovereign")
+
+    if em_spreads is not None and not em_spreads.empty:
+        fig_em = go.Figure()
+        for col in em_spreads.columns[:6]:
+            fig_em.add_trace(go.Scatter(x=em_spreads.index, y=em_spreads[col], name=col))
+        fig_em.add_hline(y=cfg.THRESH["em_spread_stress"], line_dash="dot",
+                         line_color="#d35400", annotation_text="Stress")
+        fig_em.add_hline(y=cfg.THRESH["em_spread_crisis"], line_dash="dot",
+                         line_color="#c0392b", annotation_text="Crisis")
+        fig_em.update_layout(title="EM Sovereign Spreads (EMBI proxy, bps)",
+                             yaxis_title="bps", height=300)
+        st.plotly_chart(fig_em, use_container_width=True)
+
+    col_embi, col_africa = st.columns(2)
+    with col_embi:
+        embi   = ind.get("embi", np.nan)
+        em_rg  = ind.get("em_regime", "")
+        em_wide = ind.get("em_spreads_widening", False)
+        st.metric("EMBI Spread", f"{embi:.0f} bps" if not _nan(embi) else "N/A",
+                  delta="↑ widening" if em_wide else None)
+        st.metric("EM Regime",   em_rg.upper() if em_rg else "N/A")
+
+    with col_africa:
+        af_sp  = ind.get("africa_spreads", np.nan)
+        fx_det = ind.get("fx_res_deteriorating", False)
+        worst  = ind.get("fx_res_worst_country", "")
+        st.metric("Africa Composite Spread", f"{af_sp:.0f} bps" if not _nan(af_sp) else "N/A")
+        if fx_det:
+            st.warning(f"FX reserve drawdown: {worst or 'Multiple countries'}")
+
+    st.divider()
+    st.subheader("IMF Macro Indicators")
+    if imf_df is not None and not imf_df.empty:
+        st.caption(f"Source: {imf_src}")
+        st.dataframe(imf_df.tail(5), use_container_width=True)
+    else:
+        st.info("IMF DataMapper data unavailable.")
+
+    st.divider()
+    st.subheader("FDI Inflows (World Bank)")
+    if fdi_df is not None and not fdi_df.empty:
+        fig_fdi = go.Figure()
+        for iso in (africa_focus or cfg.WB_AFRICA[:5]):
+            if iso in fdi_df.columns:
+                fig_fdi.add_trace(go.Bar(name=iso, x=fdi_df.index, y=fdi_df[iso] / 1e9))
+        fig_fdi.update_layout(barmode="group", title="FDI Net Inflows (USD bn)",
+                              yaxis_title="USD bn", height=280)
+        st.plotly_chart(fig_fdi, use_container_width=True)
+
+    st.info(
+        "📌 **Eurobond maturity wall 2025–2027**: Ghana, Kenya, Ethiopia, Egypt each face "
+        "significant Eurobond redemptions. Monitor IMF program status, FX reserve cover, "
+        "and Eurobond yield spreads."
     )
 
+    col_san, col_cyb = st.columns(2)
+    with col_san:
+        san_elev = ind.get("sanctions_elevated", False)
+        st.markdown("**Sanctions Regime**")
+        if san_elev:
+            st.warning("Elevated sanctions intensity detected")
+        else:
+            st.success("Sanctions intensity: normal")
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-def main():
-    now = datetime.utcnow()
+    with col_cyb:
+        st.markdown("**Cyber Risk**")
+        if cyber is not None and not cyber.empty:
+            st.dataframe(cyber.tail(3), use_container_width=True)
+        else:
+            st.info("Cyber risk data unavailable.")
 
-    # ── Sidebar ───────────────────────────────────────────────────────────────
-    with st.sidebar:
-        st.markdown("### Settings")
-        period = st.selectbox("Market data period", ["3mo", "6mo", "1y", "2y"], index=2)
-        st.markdown("---")
-        st.caption(
-            "**Data sources**\n"
-            "- yfinance — market prices\n"
-            "- US Treasury Direct — yield curve\n"
-            "- Synthetic — GPR, shipping, EM spreads,\n"
-            "  FX reserves, minerals, FDI, defense\n\n"
-            "Prices: 15 min cache · Yields: 1 hr · Structural: 24 hr"
-        )
-        if st.button("Clear cache & refresh", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
 
-    # ── Load all data ─────────────────────────────────────────────────────────
-    with st.spinner("Loading data…"):
-        mkt       = df_.get_market_data(period=period)
-        curve_lat, curve_hist = df_.get_yield_curve()
-        gpr       = df_.get_gpr()
-        shipping  = df_.get_shipping_stress()
-        em_sp     = df_.get_em_spreads()
-        fx_res    = df_.get_fx_reserves()
-        minerals  = df_.get_critical_minerals()
-        defense   = df_.get_defense_spending()
-        fdi       = df_.get_fdi_flows()
-
-    ind = ind_.compute_all(mkt, curve_hist, gpr, shipping, em_sp, fx_res)
-    insights = re_.run(ind)
-
-    # ── Header ────────────────────────────────────────────────────────────────
-    st.markdown(
-        f'<div style="display:flex;justify-content:space-between;align-items:center;'
-        f'margin-bottom:4px;">'
-        f'<span style="font-size:1.1rem;font-weight:700;font-family:monospace;'
-        f'letter-spacing:0.05em;">MACRO INTELLIGENCE SYSTEM</span>'
-        f'<span style="font-size:0.68rem;color:#bbb;font-family:monospace;">'
-        f'{now.strftime("%Y-%m-%d  %H:%M UTC")}</span></div>',
-        unsafe_allow_html=True,
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — INFERENCE
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[5]:
+    st.subheader("Forward-Looking Inference Engine")
+    st.caption(
+        "Conditional IF–THEN rules: trigger × context → forward statement. "
+        "Sorted by confidence: high → medium → low."
     )
 
-    # Quick pulse row: 7 key numbers
-    def last_chg(col):
-        s = mkt[col].dropna() if col in mkt.columns else pd.Series(dtype=float)
-        if len(s) < 2: return (_fmt(s.iloc[-1]) if len(s) else "—", None)
-        price = s.iloc[-1]
-        chg = (price / s.iloc[-2] - 1) * 100
-        sign = "+" if chg >= 0 else ""
-        return _fmt(price), f"{sign}{chg:.2f}%"
+    if not show_inference:
+        st.info("Enable 'Forward-Looking Inference' in the sidebar.")
+    elif not inferences:
+        st.success("No forward-looking risk signals triggered. Regime is broadly stable.")
+    else:
+        for conf_label, conf_key in [
+            ("HIGH CONFIDENCE", "high"),
+            ("MEDIUM CONFIDENCE", "medium"),
+            ("LOW / SPECULATIVE", "low"),
+        ]:
+            group = [i for i in inferences if i.get("confidence") == conf_key]
+            if not group:
+                continue
+            st.markdown(f"#### {conf_label}")
+            for inf in group:
+                with st.container():
+                    st.markdown(
+                        f'<div class="inference-{conf_key}">'
+                        f'{inf.get("icon","📌")} <b>{inf.get("category","")}</b> · '
+                        f'<i>{inf.get("horizon","")}</i><br>'
+                        f'<b>{inf.get("statement","")}</b><br>'
+                        f'<small>Trigger: {inf.get("trigger","")} | '
+                        f'Context: {inf.get("context","")}</small>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    with st.expander("Implication"):
+                        st.write(inf.get("implication", ""))
+            st.divider()
 
-    pulse = [
-        ("S&P 500",  *last_chg("spx")),
-        ("10Y UST",  *last_chg("us10y")),
-        ("DXY",      *last_chg("dxy")),
-        ("WTI",      *last_chg("wti")),
-        ("Gold",     *last_chg("gold")),
-        ("VIX",      *last_chg("vix")),
-        ("MSCI EM",  *last_chg("eem")),
-    ]
-    _metric_row(pulse)
-    st.markdown("---")
-
-    # ── Regime Assessment ─────────────────────────────────────────────────────
-    render_stress_gauge(ind.get("total_stress_score", 0))
-    st.markdown(
-        '<div class="section-label" style="margin-top:8px;">Regime Assessment — Rules Engine Output</div>',
-        unsafe_allow_html=True,
+    st.subheader("Cross-Asset Correlation Regime")
+    corr_rg = ind.get("correlation_regime", "")
+    st.metric("Equity–Bond Correlation", corr_rg.upper() if corr_rg else "N/A")
+    st.caption(
+        "Positive correlation (stress regime) = bonds and equities selling off together. "
+        "Historically marks stagflationary or acute stress periods."
     )
 
-    alerts   = [i for i in insights if i["level"] == "alert"]
-    warnings = [i for i in insights if i["level"] == "warning"]
-    infos    = [i for i in insights if i["level"] == "info"]
+    eem = mkt.get("eem") if mkt else None
+    emb = mkt.get("emb") if mkt else None
+    if eem is not None and emb is not None and not eem.empty and not emb.empty:
+        fig_cross = go.Figure()
+        fig_cross.add_trace(go.Scatter(
+            x=eem.index, y=eem / eem.iloc[0] * 100,
+            name="EEM (EM Equities)", line=dict(color="#c0392b"),
+        ))
+        fig_cross.add_trace(go.Scatter(
+            x=emb.index, y=emb / emb.iloc[0] * 100,
+            name="EMB (EM Bonds)", line=dict(color="#2980b9"),
+        ))
+        fig_cross.update_layout(title="EM Equities vs EM Bonds (indexed to 100)",
+                                yaxis_title="Index", height=280)
+        st.plotly_chart(fig_cross, use_container_width=True)
 
-    # Display alerts full-width, then warn+info in 2 cols
-    for ins in alerts:
-        render_insight(ins)
 
-    if warnings or infos:
-        c1, c2 = st.columns(2)
-        with c1:
-            for ins in warnings:
-                render_insight(ins)
-        with c2:
-            for ins in infos:
-                render_insight(ins)
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 7 — WEEKLY NOTE
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[6]:
+    st.subheader(f"Weekly Macro Briefing — {note['as_of']}")
 
-    st.markdown("---")
+    if not show_narrative:
+        st.info("Enable 'Weekly Narrative Note' in the sidebar.")
+    else:
+        regime_key = note["regime_label"].lower()
+        st.markdown(_regime_html(regime_key), unsafe_allow_html=True)
+        st.markdown(f"### {note['headline']}")
+        st.caption(f"*{note['regime_desc']}*")
+        st.divider()
 
-    # ── Tabs ──────────────────────────────────────────────────────────────────
-    tabs = st.tabs([
-        "📈 Macro Regime",
-        "🌍 Geo-Risk",
-        "💰 Capital Flows",
-        "🌐 EM & Africa",
-        "🔮 Market-Implied",
-    ])
+        for sec in note["sections"]:
+            with st.expander(f"**{sec['title']}**", expanded=True):
+                st.markdown(sec["body"])
+                for bullet in sec["bullets"]:
+                    st.markdown(f"- {bullet}")
 
-    # ════════ Tab 1: Macro Regime ══════════════════════════════════════════════
-    with tabs[0]:
-        # Key metrics
-        _metric_row([
-            ("DXY",         _fmt(ind.get("dxy")),     _pct(ind.get("dxy_1m_chg"))),
-            ("10Y Yield",   f"{ind.get('us10y', 0):.2f}%", None),
-            ("2Y Yield",    f"{ind.get('us2y', 0):.2f}%", None),
-            ("Curve Slope", f"{ind.get('curve_slope', 0):+.0f} bps",
-             ind.get("curve_direction", "")),
-            ("VIX",         _fmt(ind.get("vix")),     _pct(ind.get("vix_1m_chg"))),
-            ("Oil (Brent)", _fmt(ind.get("oil")),     _pct(ind.get("oil_1m_chg"))),
-            ("Copper",      _fmt(ind.get("copper"), 3), _pct(ind.get("copper_1m_chg"))),
-        ])
+        st.divider()
+        if note.get("data_sources"):
+            st.caption(f"**Data sources:** {' · '.join(note['data_sources'])}")
+        st.caption(note["footer"])
 
-        ca, cb = st.columns(2)
-        with ca:
-            st.markdown('<div class="section-label">Yield Curve — Current</div>',
-                        unsafe_allow_html=True)
-            if not curve_lat.empty:
-                st.plotly_chart(curve_snapshot(curve_lat), use_container_width=True)
-                s10 = ind.get("us10y", np.nan)
-                s2  = ind.get("us2y",  np.nan)
-                s3m = ind.get("us3m",  np.nan)
-                mc1, mc2, mc3 = st.columns(3)
-                def sp(a, b): return f"{(a-b)*100:+.0f} bps" if not (np.isnan(a) or np.isnan(b)) else "—"
-                mc1.metric("10Y–2Y",  sp(s10, s2))
-                mc2.metric("10Y–3M",  sp(s10, s3m))
-                mc3.metric("Regime",  ind.get("curve_regime", "—").upper())
-        with cb:
-            st.markdown('<div class="section-label">Curve Shifts (Today vs 1M/3M/1Y ago)</div>',
-                        unsafe_allow_html=True)
-            if not curve_hist.empty:
-                st.plotly_chart(curve_history(curve_hist), use_container_width=True)
-
-        st.markdown('<div class="section-label">10Y−2Y Slope History</div>',
-                    unsafe_allow_html=True)
-        slope_s = ind.get("curve_slope_series")
-        if slope_s is not None and not slope_s.empty:
-            sfig = lfig(slope_s.to_frame("10Y−2Y slope"), height=200, yaxis_title="bps")
-            sfig.add_hline(y=0, line_dash="dash", line_color="#c0392b",
-                           annotation_text="0 = inversion", annotation_font_size=9)
-            st.plotly_chart(sfig, use_container_width=True)
-
-        cc, cd = st.columns(2)
-        with cc:
-            st.markdown('<div class="section-label">VIX — 1 Year</div>',
-                        unsafe_allow_html=True)
-            if "vix" in mkt.columns:
-                vfig = lfig(mkt[["vix"]], height=200)
-                vfig.add_hline(y=25, line_dash="dot", line_color="#d35400",
-                               annotation_text="25 elevated", annotation_font_size=9)
-                vfig.add_hline(y=35, line_dash="dot", line_color="#c0392b",
-                               annotation_text="35 high", annotation_font_size=9)
-                st.plotly_chart(vfig, use_container_width=True)
-        with cd:
-            st.markdown('<div class="section-label">Commodities — rebased to 100</div>',
-                        unsafe_allow_html=True)
-            com_cols = [c for c in ["brent", "copper", "gold"] if c in mkt.columns]
-            if com_cols:
-                st.plotly_chart(lfig(mkt[com_cols], norm=True, height=200),
-                                use_container_width=True)
-
-    # ════════ Tab 2: Geo-Risk ══════════════════════════════════════════════════
-    with tabs[1]:
-        _metric_row([
-            ("GPR Index",    f"{ind.get('gpr', 0):.0f}",
-             _pct(ind.get("gpr_mom_chg"))),
-            ("GPR Regime",   ind.get("gpr_regime", "—").upper(), None),
-            ("Shipping",     f"{ind.get('shipping', 0):,.0f}",
-             _pct(ind.get("shipping_1m_chg"))),
-            ("Ship Regime",  ind.get("shipping_regime", "—").upper(), None),
-            ("Oil 1M",       _pct(ind.get("oil_1m_chg")), None),
-            ("Geo Stress",   f"{ind.get('geo_stress_score', 0)}/3", None),
-        ])
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown('<div class="section-label">Geopolitical Risk Index (GPR)</div>',
-                        unsafe_allow_html=True)
-            st.plotly_chart(
-                lfig(gpr.to_frame("GPR"), yaxis_title="Index (baseline=100)"),
-                use_container_width=True)
-            st.caption(
-                "GPR (Caldara & Iacoviello, 2022): measures geopolitical risk from newspaper coverage. "
-                "Baseline = 100. Values >130 historically correlate with lower investment, "
-                "higher energy prices, and defense spending acceleration."
-            )
-        with c2:
-            st.markdown('<div class="section-label">Shipping Stress Index</div>',
-                        unsafe_allow_html=True)
-            sfig = lfig(shipping.to_frame("Shipping"), yaxis_title="Index")
-            sfig.add_hline(y=2500, line_dash="dot", line_color="#d35400",
-                           annotation_text="Stress", annotation_font_size=9)
-            sfig.add_hline(y=4000, line_dash="dot", line_color="#c0392b",
-                           annotation_text="Crisis", annotation_font_size=9)
-            st.plotly_chart(sfig, use_container_width=True)
-            st.caption(
-                "Proxy for Baltic Dry Index / container rate composite. "
-                "Shipping stress signals supply-chain disruption, "
-                "typically triggered by chokepoint crises (Red Sea, Hormuz, Panama)."
-            )
-
-        st.markdown('<div class="section-label">Critical Minerals — Price Index (Jan 2020 = 100)</div>',
-                    unsafe_allow_html=True)
-        if not minerals.empty:
-            st.plotly_chart(lfig(minerals, norm=False, height=230), use_container_width=True)
-        st.caption(
-            "Critical minerals are the structural backbone of the energy transition and defense supply chains. "
-            "Lithium & cobalt → EV batteries. Copper → electrification. "
-            "Rare earths → defense, wind turbines, EVs. "
-            "Price surges signal upstream supply bottlenecks or demand acceleration."
+        md_text = narr.to_markdown(note)
+        st.download_button(
+            label="📥 Download Briefing (Markdown)",
+            data=md_text.encode("utf-8"),
+            file_name=f"macro_briefing_{datetime.date.today().isoformat()}.md",
+            mime="text/markdown",
+            use_container_width=True,
         )
-
-        c3, c4 = st.columns(2)
-        with c3:
-            st.markdown('<div class="section-label">Defense Spending (% of GDP)</div>',
-                        unsafe_allow_html=True)
-            if not defense.empty:
-                st.plotly_chart(lfig(defense, yaxis_title="% GDP", height=220),
-                                use_container_width=True)
-        with c4:
-            st.markdown('<div class="section-label">Oil vs Shipping — rebased to 100</div>',
-                        unsafe_allow_html=True)
-            combined = pd.DataFrame({
-                "Oil (Brent)": mkt["brent"] if "brent" in mkt.columns else pd.Series(dtype=float),
-                "Shipping":    shipping.resample("B").last().reindex(mkt.index, method="ffill"),
-            }).dropna()
-            if not combined.empty:
-                st.plotly_chart(lfig(combined, norm=True, height=220),
-                                use_container_width=True)
-
-    # ════════ Tab 3: Capital Flows & Structural ════════════════════════════════
-    with tabs[2]:
-        st.markdown('<div class="section-label">FDI Inflows by Region (USD bn)</div>',
-                    unsafe_allow_html=True)
-        if not fdi.empty:
-            st.plotly_chart(lfig(fdi, height=240, yaxis_title="USD bn"),
-                            use_container_width=True)
-        st.caption(
-            "FDI is the most durable form of capital flow — it signals where production "
-            "is being built for the next decade. South/SE Asia leads on manufacturing relocation. "
-            "Sub-Saharan Africa benefits from commodity FDI but needs to deepen manufacturing linkages."
-        )
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown('<div class="section-label">Defense Budgets — Long View</div>',
-                        unsafe_allow_html=True)
-            if not defense.empty:
-                st.plotly_chart(lfig(defense, yaxis_title="% GDP"), use_container_width=True)
-            st.caption(
-                "NATO Europe's defense spending is at a 30-year high and rising. "
-                "Russia's budget is approaching wartime levels. "
-                "Defense spending shifts reshape industrial policy, R&D allocation, and critical mineral demand."
-            )
-        with c2:
-            st.markdown('<div class="section-label">Critical Minerals — Strategic Exposure</div>',
-                        unsafe_allow_html=True)
-            if not minerals.empty:
-                st.plotly_chart(lfig(minerals, norm=False), use_container_width=True)
-
-        # Structural themes table
-        st.markdown('<div class="section-label">Structural Foresight — Power Map</div>',
-                    unsafe_allow_html=True)
-        themes = [
-            ("Energy Transition", "Solar, wind, SMR, hydrogen — driving copper, lithium, cobalt demand through 2040",
-             "DRC, Chile, Indonesia, Morocco"),
-            ("Industrial Relocation", "Supply chain diversification from China — Vietnam, India, Mexico, Morocco leading",
-             "Vietnam, India, Mexico, Morocco"),
-            ("Digital Sovereignty", "US/EU/China splitting cloud, AI, semiconductor supply chains",
-             "US, Taiwan, Netherlands (ASML), India"),
-            ("Defense Architecture", "NATO 2% GDP target, AUKUS, Gulf rearmament — structural spending shift",
-             "US, EU, Gulf, Australia"),
-            ("Debt Diplomacy", "China BRI 2.0, Gulf SWFs, IMF restructuring — reshaping EM financing",
-             "Africa, South Asia, LatAm"),
-            ("Food Security", "Wheat corridor disruption, fertilizer supply, climate crop risk",
-             "Ukraine, Russia, Morocco (OCP), Saudi Arabia"),
-            ("Water Stress", "Aquifer depletion, drought risk intensifying in MENA, SSA, South Asia",
-             "Egypt, India, Morocco, LatAm"),
-        ]
-        h = ('<table class="dtab"><tr>'
-             '<th style="text-align:left;">Theme</th>'
-             '<th style="text-align:left;">Dynamics</th>'
-             '<th style="text-align:left;">Key geographies</th></tr>')
-        for t, d, g in themes:
-            h += f'<tr><td><strong>{t}</strong></td><td>{d}</td><td style="color:#888;">{g}</td></tr>'
-        h += "</table>"
-        st.markdown(h, unsafe_allow_html=True)
-
-    # ════════ Tab 4: EM & Africa ═══════════════════════════════════════════════
-    with tabs[3]:
-        embi_val    = ind.get("embi", np.nan)
-        africa_val  = ind.get("africa_spreads", np.nan)
-        fx_min      = ind.get("fx_res_min_chg", np.nan)
-        worst       = ind.get("fx_res_worst_country", "")
-
-        _metric_row([
-            ("EMBI Global",     f"{embi_val:.0f} bps" if not np.isnan(embi_val) else "—",
-             "widening ↑" if ind.get("em_spreads_widening") else "stable"),
-            ("Africa Spread",   f"{africa_val:.0f} bps" if not np.isnan(africa_val) else "—", None),
-            ("EM Regime",       ind.get("em_regime", "—").upper(), None),
-            ("FX Reserves",     "Stress" if ind.get("fx_res_deteriorating") else "Stable",
-             f"Worst: {worst}" if worst else None),
-            ("Dollar Regime",   ind.get("dollar_regime", "—").upper(), None),
-        ])
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown('<div class="section-label">EM Sovereign Spreads (bps)</div>',
-                        unsafe_allow_html=True)
-            if not em_sp.empty:
-                sfig = lfig(em_sp, yaxis_title="bps")
-                sfig.add_hline(y=450, line_dash="dot", line_color="#d35400",
-                               annotation_text="Stress", annotation_font_size=9)
-                sfig.add_hline(y=600, line_dash="dot", line_color="#c0392b",
-                               annotation_text="Crisis", annotation_font_size=9)
-                st.plotly_chart(sfig, use_container_width=True)
-        with c2:
-            st.markdown('<div class="section-label">African FX Reserves (USD bn)</div>',
-                        unsafe_allow_html=True)
-            if not fx_res.empty:
-                st.plotly_chart(
-                    lfig(fx_res, yaxis_title="USD bn"),
-                    use_container_width=True)
-
-        st.markdown('<div class="section-label">EM FX vs USD — rebased to 100 (↑ = weaker EM)</div>',
-                    unsafe_allow_html=True)
-        em_fx_cols = [c for c in ["usdbrl","usdzar","usdtry","usdcnh","usdjpy"] if c in mkt.columns]
-        labels = {"usdbrl": "USD/BRL", "usdzar": "USD/ZAR", "usdtry": "USD/TRY",
-                  "usdcnh": "USD/CNH", "usdjpy": "USD/JPY"}
-        if em_fx_cols:
-            em_fx_df = mkt[em_fx_cols].rename(columns=labels)
-            st.plotly_chart(lfig(em_fx_df, norm=True, height=220), use_container_width=True)
-
-        # Debt vulnerability snapshot
-        st.markdown('<div class="section-label">Africa Sovereign Debt Stress — Snapshot</div>',
-                    unsafe_allow_html=True)
-        debt_data = [
-            ("Ghana",     "Post-restructuring", 850, "IMF program (2023)", "High"),
-            ("Ethiopia",  "G20 restructuring",  1100,"Pending resolution",  "Very High"),
-            ("Kenya",     "Eurobond maturity",   650, "$2bn due 2024 (rolled)", "High"),
-            ("Egypt",     "IMF program",         700, "Extended 2024", "High"),
-            ("Nigeria",   "Manageable",          420, "Tight FX reserves",   "Moderate"),
-            ("Zambia",    "Post-restructuring",  600, "G20 restructured 2023", "High"),
-            ("Angola",    "Oil-backed debt",     480, "China bilateral", "Moderate"),
-        ]
-        h = ('<table class="dtab"><tr>'
-             '<th>Country</th><th style="text-align:right;">Spread (bps)</th>'
-             '<th>Status</th><th>Note</th><th>Risk</th></tr>')
-        risk_color = {"Very High": "#c0392b", "High": "#d35400",
-                      "Moderate": "#7f8c8d", "Low": "#1e7e34"}
-        for country, status, spread, note, risk in debt_data:
-            color = risk_color.get(risk, "#333")
-            h += (f'<tr><td><strong>{country}</strong></td>'
-                  f'<td style="text-align:right;font-family:monospace;">{spread}</td>'
-                  f'<td>{status}</td><td style="color:#888;">{note}</td>'
-                  f'<td><span style="color:{color};font-weight:700;">{risk}</span></td></tr>')
-        h += "</table>"
-        st.markdown(h, unsafe_allow_html=True)
-
-    # ════════ Tab 5: Market-Implied ════════════════════════════════════════════
-    with tabs[4]:
-        st.markdown(
-            "**What does the future cost today?** Market prices are the best real-time consensus "
-            "forecast available — imperfect but continuous.",
-            unsafe_allow_html=False,
-        )
-
-        _metric_row([
-            ("10Y Yield",       f"{ind.get('us10y', 0):.2f}%", None),
-            ("Curve Slope",     f"{ind.get('curve_slope', 0):+.0f} bps",
-             ind.get("curve_direction", "")),
-            ("HY Credit (1M)",  _pct(ind.get("hyg_1m_chg")), None),
-            ("EM Bonds (1M)",   _pct(ind.get("emb_1m_chg")), None),
-            ("Gold 1M",         _pct(ind.get("gold_1m_chg")), None),
-            ("VIX",             _fmt(ind.get("vix")),         None),
-        ])
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown('<div class="section-label">Treasury Yields — 1Y History</div>',
-                        unsafe_allow_html=True)
-            rate_cols = [c for c in ["us3m", "us5y", "us10y", "us30y"] if c in mkt.columns]
-            rate_labels = {"us3m": "3M", "us5y": "5Y", "us10y": "10Y", "us30y": "30Y"}
-            if rate_cols:
-                st.plotly_chart(
-                    lfig(mkt[rate_cols].rename(columns=rate_labels), yaxis_title="%"),
-                    use_container_width=True)
-        with c2:
-            st.markdown('<div class="section-label">Credit & EM Bond ETFs — rebased to 100</div>',
-                        unsafe_allow_html=True)
-            etf_cols = [c for c in ["hyg", "emb", "tip"] if c in mkt.columns]
-            etf_labels = {"hyg": "HYG (HY credit)", "emb": "EMB (EM bonds)", "tip": "TIP (TIPS/inflation)"}
-            if etf_cols:
-                st.plotly_chart(
-                    lfig(mkt[etf_cols].rename(columns=etf_labels), norm=True),
-                    use_container_width=True)
-
-        c3, c4 = st.columns(2)
-        with c3:
-            st.markdown('<div class="section-label">Gold vs DXY — divergence = stress signal</div>',
-                        unsafe_allow_html=True)
-            gd_cols = {k: v for k, v in {"gold": "Gold", "dxy": "DXY"}.items() if k in mkt.columns}
-            if gd_cols:
-                st.plotly_chart(
-                    lfig(mkt[list(gd_cols.keys())].rename(columns=gd_cols), norm=True),
-                    use_container_width=True)
-            st.caption(
-                "Gold and DXY normally move inversely. When both rise together, "
-                "it signals a flight to *all* safe havens — a stress regime. "
-                "When gold rises and DXY falls, it often indicates structural de-dollarization demand."
-            )
-        with c4:
-            st.markdown('<div class="section-label">MSCI EM vs SPX — relative performance</div>',
-                        unsafe_allow_html=True)
-            eq_cols = {k: v for k, v in {"spx": "S&P 500", "eem": "MSCI EM"}.items() if k in mkt.columns}
-            if eq_cols:
-                st.plotly_chart(
-                    lfig(mkt[list(eq_cols.keys())].rename(columns=eq_cols), norm=True),
-                    use_container_width=True)
-            st.caption(
-                "EM underperformance vs SPX is often driven by: USD strength, rate differentials, "
-                "commodity price weakness, or geopolitical risk. "
-                "Persistent EM lag signals capital repatriation to DM safe havens."
-            )
-
-        # Forward-looking framework table
-        st.markdown('<div class="section-label">Market-Implied Signals — Interpretation Guide</div>',
-                    unsafe_allow_html=True)
-        signals_table = [
-            ("Curve inverting",       "Rate-cut expectations rising OR growth fears → recession watch"),
-            ("VIX > 25",              "Tail-risk hedging → risk-off positioning, USD bid"),
-            ("HYG falling",           "Credit conditions tightening → business cycle late stage"),
-            ("EMB falling + DXY ↑",   "EM stress → watch IMF program requests, Eurobond spreads"),
-            ("Gold + DXY rising",      "Flight to ALL safe havens → acute systemic stress"),
-            ("Copper rising",         "Growth recovery priced → industrial cycle turning up"),
-            ("Oil > $100 (backwarded)","Supply shock risk → stagflation scenario gaining probability"),
-            ("TIP falling",           "Real rates rising → tighter financial conditions globally"),
-        ]
-        h = ('<table class="dtab"><tr>'
-             '<th style="text-align:left;">Signal</th>'
-             '<th style="text-align:left;">What markets are saying</th></tr>')
-        for sig, meaning in signals_table:
-            h += f'<tr><td style="font-family:monospace;">{sig}</td><td>{meaning}</td></tr>'
-        h += "</table>"
-        st.markdown(h, unsafe_allow_html=True)
-
-    # ── Footer ────────────────────────────────────────────────────────────────
-    st.markdown("---")
-    fc1, fc2 = st.columns([1, 5])
-    with fc1:
-        if st.button("Refresh now"):
-            st.cache_data.clear()
-            st.rerun()
-    with fc2:
-        st.markdown(
-            '<span style="font-size:0.68rem;color:#ccc;">'
-            'Market data: yfinance (15 min) · Yields: US Treasury Direct (1 hr) · '
-            'GPR / Shipping / EM / Minerals: synthetic (illustrative)</span>',
-            unsafe_allow_html=True,
-        )
-
-
-main()

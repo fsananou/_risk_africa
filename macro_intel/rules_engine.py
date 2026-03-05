@@ -1,415 +1,269 @@
 """
-rules_engine.py — turn indicator states into actionable economist insights.
+rules_engine.py — Simple regime-state insights.
 
-Each rule reads from the indicators dict and appends an insight dict:
-  level:    "alert" | "warning" | "info"
-  category: short domain label
-  headline: one punchy sentence
-  detail:   2-4 sentences of analysis with context
-  watch:    list of 3-5 items the economist should monitor
+Takes the indicators dict → returns list of insight dicts describing CURRENT conditions.
+Each insight: level, category, headline, detail, watch.
 
-Insights are sorted alerts → warnings → info.
+For FORWARD-LOOKING conditional logic → see inference_engine.py
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from config import THRESH, LEVEL_ORDER
-
-
-def _fmt_pct(v: float | None, decimals: int = 1) -> str:
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return "N/A"
-    sign = "+" if v >= 0 else ""
-    return f"{sign}{v * 100:.{decimals}f}%"
+from config import LEVEL_ORDER, THRESH
 
 
 def _nan(v) -> bool:
     return v is None or (isinstance(v, float) and np.isnan(float(v)))
 
 
+def _pct(v, dec=1):
+    if _nan(v): return "N/A"
+    sign = "+" if v >= 0 else ""
+    return f"{sign}{v * 100:.{dec}f}%"
+
+
 def run(ind: dict) -> list[dict]:
     """
-    Execute all rules and return sorted list of insights.
-    Pass output of indicators.compute_all().
+    Execute all rules and return sorted list of insights (alerts → warnings → info).
     """
-    insights: list[dict] = []
+    out: list[dict] = []
 
-    # ── 1. Yield curve / rates regime ─────────────────────────────────────────
-    slope     = ind.get("curve_slope", np.nan)
-    direction = ind.get("curve_direction", "")
-    regime    = ind.get("curve_regime", "normal")
+    def add(level, category, headline, detail, watch):
+        out.append({"level": level, "category": category,
+                    "headline": headline, "detail": detail, "watch": watch})
 
-    if not _nan(slope):
-        if regime == "inverted":
-            insights.append({
-                "level": "alert",
-                "category": "Rates Regime",
-                "headline": f"Yield curve inverted ({slope:+.0f} bps, {direction})",
-                "detail": (
-                    f"An inversion of {slope:.0f} bps has preceded every US recession since 1960, "
-                    f"with a lead time of 12–18 months. The curve is currently {direction}, which "
-                    + ("may signal early market pricing of Fed rate cuts — watch FOMC communications carefully."
-                       if direction == "steepening" else
-                       "signals ongoing credit tightening and falling growth expectations.")
-                ),
-                "watch": [
-                    "Fed Funds futures curve", "Credit spreads (IG, HY)",
-                    "Bank lending standards (SLOOS)", "Labor market softening",
-                ],
-            })
-        elif regime == "flat":
-            insights.append({
-                "level": "warning",
-                "category": "Rates Regime",
-                "headline": f"Yield curve flat ({slope:+.0f} bps, {direction})",
-                "detail": (
-                    "A flat curve compresses bank net interest margins and signals slowing growth pricing. "
-                    + ("Steepening from flat territory often marks the onset of a rate-cut cycle." if direction == "steepening" else
-                       "Continued flattening increases recession risk and drags on financial sector profitability.")
-                ),
-                "watch": [
-                    "2Y-10Y spread trend (daily)", "Fed meeting minutes",
-                    "Bank earnings and margin guidance", "Mortgage origination volumes",
-                ],
-            })
-        elif regime == "steep":
-            insights.append({
-                "level": "info",
-                "category": "Rates Regime",
-                "headline": f"Yield curve steep ({slope:+.0f} bps) — reflation or fiscal premium?",
-                "detail": (
-                    f"A steep curve ({slope:.0f} bps) can mean two things: markets pricing robust growth ahead, "
-                    "or rising term premium from fiscal concerns (deficit, issuance). "
-                    "Distinguish by checking whether breakeven inflation is rising (inflation premium) "
-                    "or TIPS real yields are rising (growth/risk premium)."
-                ),
-                "watch": [
-                    "Breakeven inflation (5Y5Y)", "TIPS real yields",
-                    "Treasury auction bid-to-cover", "Fiscal deficit projections",
-                ],
-            })
-
-    # ── 2. Volatility / risk regime ───────────────────────────────────────────
+    slope      = ind.get("curve_slope",  np.nan)
+    curve_rg   = ind.get("curve_regime", "normal")
+    direction  = ind.get("curve_direction", "")
     vix        = ind.get("vix", np.nan)
-    vix_regime = ind.get("vix_regime", "normal")
+    vix_rg     = ind.get("vix_regime", "normal")
+    dxy        = ind.get("dxy", np.nan)
+    dollar_rg  = ind.get("dollar_regime", "neutral")
+    oil_rg     = ind.get("oil_regime", "stable")
+    oil_chg    = ind.get("oil_1m_chg", np.nan)
+    cu_rg      = ind.get("copper_regime", "stable")
+    cu_chg     = ind.get("copper_1m_chg", np.nan)
+    gold_rg    = ind.get("gold_regime", "stable")
+    gold_chg   = ind.get("gold_1m_chg", np.nan)
+    gpr_rg     = ind.get("gpr_regime", "normal")
+    gpr        = ind.get("gpr", np.nan)
+    ship_rg    = ind.get("shipping_regime", "normal")
+    em_rg      = ind.get("em_regime", "normal")
+    embi       = ind.get("embi", np.nan)
+    africa_sp  = ind.get("africa_spreads", np.nan)
+    em_wide    = ind.get("em_spreads_widening", False)
+    fx_det     = ind.get("fx_res_deteriorating", False)
+    worst      = ind.get("fx_res_worst_country", "")
+    fin_cond   = ind.get("fin_cond_regime", "neutral")
+    hy         = ind.get("hy_spread", np.nan)
+    hy_rg      = ind.get("hy_regime", "normal")
+    be5        = ind.get("breakeven5y", np.nan)
+    be55       = ind.get("breakeven5y5y", np.nan)
+    inf_rg     = ind.get("inflation_regime", "normal")
+    tp         = ind.get("term_premium", np.nan)
+    corr_rg    = ind.get("correlation_regime", "normal")
+    move       = ind.get("move_proxy", np.nan)
+    sys_stress = ind.get("systemic_stress_signal", False)
+    san_elev   = ind.get("sanctions_elevated", False)
+    fin_score  = ind.get("financial_stress_score", 0)
+    geo_score  = ind.get("geo_stress_score", 0)
 
+    # ── 1. Yield curve ────────────────────────────────────────────────────────
+    if not _nan(slope):
+        if curve_rg == "inverted":
+            add("alert", "Rates Regime",
+                f"Yield curve inverted ({slope:+.0f} bps, {direction})",
+                (f"A {slope:.0f} bps inversion has preceded every US recession since 1960 "
+                 f"(12–18 month lead). The curve is {direction}, which "
+                 + ("may signal early rate-cut pricing — watch Fed guidance."
+                    if direction == "steepening" else
+                    "confirms ongoing credit tightening.")),
+                ["Fed Funds futures curve", "Credit spreads (IG/HY)", "Bank lending standards",
+                 "Labor market prints"])
+        elif curve_rg == "flat":
+            add("warning", "Rates Regime",
+                f"Yield curve flat ({slope:+.0f} bps, {direction})",
+                ("Flat curve compresses bank margins and signals slowing growth pricing. "
+                 + ("Steepening from flat often marks onset of rate-cut cycle." if direction == "steepening"
+                    else "Continued flattening elevates recession probability.")),
+                ["2Y–10Y spread trend", "Fed meeting minutes", "Bank earnings", "Mortgage volumes"])
+        elif curve_rg == "steep":
+            add("info", "Rates Regime",
+                f"Yield curve steep ({slope:+.0f} bps) — reflation or fiscal premium?",
+                ("Steep curve can mean robust growth pricing OR rising term premium from fiscal concerns. "
+                 "Distinguish by checking whether TIPS real yields or breakeven inflation drives it."),
+                ["5Y5Y breakeven", "TIPS real yields", "Treasury auction demand", "Fiscal deficit"])
+
+    # ── 2. VIX / Volatility ───────────────────────────────────────────────────
     if not _nan(vix):
-        if vix_regime == "high":
-            insights.append({
-                "level": "alert",
-                "category": "Market Stress / VIX",
-                "headline": f"VIX in high-stress territory ({vix:.1f})",
-                "detail": (
-                    f"VIX above {THRESH['vix_high']} reflects genuine market fear, not just hedging. "
-                    "In this regime: USD safe-haven bid strengthens, EM sees capital outflows, "
-                    "commodity demand contracts, and credit spreads widen. "
-                    "Risk-reward is skewed defensive. Watch for liquidity dislocations."
-                ),
-                "watch": [
-                    "EM capital flows (IIF weekly)", "HY/IG credit spread ratio",
-                    "USD/JPY and USD/CHF (safe-haven FX)", "Commodity spot vs futures spread",
-                ],
-            })
-        elif vix_regime == "elevated":
-            insights.append({
-                "level": "warning",
-                "category": "Market Stress / VIX",
-                "headline": f"Volatility elevated (VIX {vix:.1f})",
-                "detail": (
-                    "Above-average VIX signals hedging demand and tail-risk pricing. "
-                    "Markets are not in crisis but uncertainty is real. "
-                    "Monitor cross-asset correlations — if equities, bonds, and EM FX all sell off together, "
-                    "a regime shift to full risk-off may be underway."
-                ),
-                "watch": [
-                    "Equity/bond correlation", "VIX term structure (contango vs backwardation)",
-                    "Put/call ratio", "Options skew",
-                ],
-            })
+        if vix_rg == "high":
+            add("alert", "Market Stress / VIX",
+                f"VIX in high-stress territory ({vix:.1f})",
+                ("VIX >35 reflects genuine fear. Expect: USD safe-haven bid, EM capital outflows, "
+                 "commodity demand destruction, credit spread widening. "
+                 "Risk-reward skewed defensively."),
+                ["EM capital flows (IIF weekly)", "HY/IG spread ratio",
+                 "Safe-haven FX (JPY, CHF, Gold)", "Commodity spot vs futures"])
+        elif vix_rg == "elevated":
+            add("warning", "Market Stress / VIX",
+                f"Volatility elevated (VIX {vix:.1f})",
+                ("Above-normal VIX signals hedging demand and tail-risk pricing. "
+                 "Monitor cross-asset correlations — if bonds and equities sell off together, "
+                 "a full risk-off regime transition may be underway."),
+                ["Options skew", "Put/call ratio", "VIX term structure", "EM positioning"])
 
-    # ── 3. Dollar regime + EM implications ───────────────────────────────────
-    dxy           = ind.get("dxy", np.nan)
-    dollar_regime = ind.get("dollar_regime", "neutral")
-    em_regime     = ind.get("em_regime", "normal")
-    em_widening   = ind.get("em_spreads_widening", False)
+    # ── 3. Dollar regime ──────────────────────────────────────────────────────
+    if dollar_rg in ("strong", "very_strong") and not _nan(dxy):
+        em_note = (" Combined with widening EM spreads, refinancing risk is acute."
+                   if em_rg in ("stress", "crisis") else "")
+        add("alert" if dollar_rg == "very_strong" and em_rg in ("stress","crisis") else "warning",
+            "Dollar / EM Capital",
+            f"{'Very strong' if dollar_rg == 'very_strong' else 'Strong'} USD (DXY {dxy:.1f})",
+            ("Strong dollar mechanically tightens global financial conditions. "
+             "EM sovereigns with USD-denominated debt face higher real debt-service costs. "
+             "Commodity prices (USD-priced) face headwinds." + em_note),
+            ["EM FX reserves", "Eurobond maturity wall 2025-2027",
+             "IMF program requests", "Commodity prices in local currency"])
+    elif dollar_rg == "weakening":
+        add("info", "Dollar / EM Capital",
+            f"USD weakening (DXY {dxy:.1f}) — EM tailwind",
+            ("Dollar weakness eases global financial conditions. "
+             "Expect rotation into EM equities and local-currency bonds. "
+             "Commodity prices (gold, oil, copper) also benefit."),
+            ["EM equity ETF inflows (EEM)", "EM local bond yields",
+             "Gold and commodity breakouts", "Fed policy trajectory"])
 
-    if dollar_regime in ("strong", "very_strong") and not _nan(dxy):
-        em_compound = em_regime in ("stress", "crisis")
-        insights.append({
-            "level": "alert" if (dollar_regime == "very_strong" and em_compound) else "warning",
-            "category": "Dollar / EM Capital",
-            "headline": f"{'Very strong' if dollar_regime == 'very_strong' else 'Strong'} USD (DXY {dxy:.1f})",
-            "detail": (
-                f"DXY at {dxy:.1f} tightens global financial conditions mechanically — "
-                "every EM sovereign and corporate with USD-denominated debt faces higher real debt-service costs. "
-                + ("Combined with widening EM spreads, refinancing risk for frontier markets is acute. " if em_compound else "") +
-                "Commodity prices (priced in USD) face a structural headwind. "
-                "Net oil importers (India, SSA) face double pressure: stronger USD + higher energy import bills."
-            ),
-            "watch": [
-                "EM FX reserves (months of import cover)", "Eurobond maturity wall (2025-2027)",
-                "IMF/World Bank program requests", "Commodity prices in local currency terms",
-            ],
-        })
-    elif dollar_regime == "weakening":
-        insights.append({
-            "level": "info",
-            "category": "Dollar / EM Capital",
-            "headline": f"USD weakening (DXY {dxy:.1f}, below 50d MA)",
-            "detail": (
-                "Dollar weakness eases global financial conditions and is a tailwind for EM assets. "
-                "Expect rotation into EM equities and local-currency bonds. "
-                "Commodity prices (gold, oil, copper) also benefit from USD softness."
-            ),
-            "watch": [
-                "EM equity ETF inflows (EEM)", "EM local bond yields",
-                "Gold and commodity breakouts", "Fed policy trajectory",
-            ],
-        })
-
-    # ── 4. Geo-risk + shipping ────────────────────────────────────────────────
-    gpr         = ind.get("gpr", np.nan)
-    gpr_regime  = ind.get("gpr_regime", "normal")
-    gpr_chg     = ind.get("gpr_mom_chg", np.nan)
-    ship_regime = ind.get("shipping_regime", "normal")
-    oil_regime  = ind.get("oil_regime", "stable")
-
-    if gpr_regime in ("elevated", "high"):
-        compound_geo = (ship_regime in ("stress", "crisis")) or (oil_regime == "surging")
-        level = "alert" if (gpr_regime == "high" or compound_geo) else "warning"
+    # ── 4. Geo-risk ───────────────────────────────────────────────────────────
+    if gpr_rg in ("elevated", "high"):
         extras = []
-        if ship_regime in ("stress", "crisis"):
-            extras.append("shipping disruption amplifying supply-chain costs")
-        if oil_regime == "surging":
-            extras.append("oil price surge adding stagflationary pressure")
-        detail = (
-            f"GPR at {gpr:.0f} (baseline = 100) reflects elevated conflict and policy uncertainty. "
-            + (f"Compounding factors: {', '.join(extras)}. " if extras else "") +
-            "Elevated GPR is empirically linked to: lower investment, higher energy prices, "
-            "accelerated defense spending, and industrial supply-chain relocation."
-        )
-        insights.append({
-            "level": level,
-            "category": "Geo-Risk / Supply Chains",
-            "headline": (
-                f"Geo-risk {'high' if gpr_regime == 'high' else 'elevated'} (GPR {gpr:.0f}"
-                + (f", {_fmt_pct(gpr_chg)} MoM" if not _nan(gpr_chg) else "")
-                + (")"
-                   + (" + shipping stress" if ship_regime in ("stress", "crisis") else "")
-                   + (" + oil surging" if oil_regime == "surging" else ""))
-            ),
-            "detail": detail,
-            "watch": [
-                "Red Sea / Hormuz shipping rates", "LNG contract spot premiums",
-                "Defense procurement (US, EU, Gulf)", "FDI redirection flows (Vietnam, India, Morocco)",
-            ],
-        })
+        if ship_rg in ("stress", "crisis"): extras.append("shipping disruption")
+        if oil_rg == "surging":             extras.append("oil price surge")
+        if san_elev:                         extras.append("elevated sanctions")
+        level = "alert" if (gpr_rg == "high" or len(extras) >= 2) else "warning"
+        add(level, "Geo-Risk / Supply Chains",
+            f"Geo-risk {'high' if gpr_rg == 'high' else 'elevated'} (GPR {gpr:.0f})"
+            + (f" + {', '.join(extras)}" if extras else ""),
+            (f"GPR at {gpr:.0f} (baseline=100) reflects conflict and policy uncertainty. "
+             + ("Shipping disruption is transmitting through supply chains. " if ship_rg in ("stress","crisis") else "") +
+             ("Oil surge adds stagflationary pressure. " if oil_rg == "surging" else "") +
+             "Elevated GPR correlates with lower investment, higher energy prices, "
+             "and accelerated defense spending."),
+            ["Red Sea/Hormuz shipping rates", "LNG contract premiums",
+             "Defense procurement", "FDI redirection flows"])
 
     # ── 5. Commodity regime ───────────────────────────────────────────────────
-    copper_regime = ind.get("copper_regime", "stable")
-    cu_chg        = ind.get("copper_1m_chg", np.nan)
-    oil_chg       = ind.get("oil_1m_chg", np.nan)
-    gold_regime   = ind.get("gold_regime", "stable")
-    gold_chg      = ind.get("gold_1m_chg", np.nan)
+    if cu_rg == "rising" and not _nan(cu_chg):
+        oil_ctx = (" Oil stability suggests demand-pull not supply inflation." if oil_rg == "stable"
+                   else " Rising oil alongside copper = broad reflation.")
+        add("info", "Growth Signal (Copper)",
+            f"Copper +{cu_chg*100:.1f}% (1M) — positive industrial signal",
+            ("Copper leads industrial activity by 3–6 months. Rising copper signals: "
+             "improving manufacturing PMI, infrastructure demand, EV supply-chain acceleration." + oil_ctx),
+            ["China Caixin PMI", "EV production schedules", "LME copper inventories", "BHP/Freeport guidance"])
+    elif cu_rg == "falling" and not _nan(cu_chg):
+        add("warning", "Growth Signal (Copper)",
+            f"Copper {cu_chg*100:.1f}% (1M) — industrial slowdown signal",
+            ("Falling copper anticipates PMI deterioration by 3–6 months. "
+             "EM commodity exporters (DRC, Chile, Zambia) most exposed."),
+            ["China NBS/Caixin PMI", "EM commodity-exporter FX", "Mining capex", "Container volumes"])
 
-    if copper_regime == "rising" and not _nan(cu_chg):
-        oil_context = (
-            " Oil stability suggests demand-pull not supply inflation — favorable macro setup."
-            if oil_regime == "stable" else
-            " Rising oil alongside copper points to broad commodity reflation — watch for inflation persistence."
-        )
-        insights.append({
-            "level": "info",
-            "category": "Growth Signal (Copper)",
-            "headline": f"Copper +{cu_chg*100:.1f}% (1M) — positive industrial growth signal",
-            "detail": (
-                "Copper is the best single commodity leading indicator of global industrial activity, "
-                "with a ~3-6 month lead on manufacturing PMIs. Rising copper suggests: "
-                "improving factory output, infrastructure demand, and EV supply-chain ramp-up."
-                + oil_context
-            ),
-            "watch": [
-                "China Caixin Manufacturing PMI", "EV production schedules (BYD, Tesla)",
-                "LME copper inventories", "BHP / Freeport earnings guidance",
-            ],
-        })
-    elif copper_regime == "falling" and not _nan(cu_chg):
-        insights.append({
-            "level": "warning",
-            "category": "Growth Signal (Copper)",
-            "headline": f"Copper {cu_chg*100:.1f}% (1M) — industrial slowdown signal",
-            "detail": (
-                "Falling copper anticipates deteriorating factory output by 3-6 months. "
-                "Key exposures: DRC (cobalt/copper), Chile (copper), Zambia (copper). "
-                "Watch for PMI revisions and China credit impulse data."
-            ),
-            "watch": [
-                "China NBS / Caixin PMI", "EM commodity-exporter FX",
-                "Mining capex plans", "Container shipping volumes",
-            ],
-        })
+    if oil_rg == "surging" and not _nan(oil_chg):
+        add("warning", "Energy / Inflation",
+            f"Oil surging (+{oil_chg*100:.1f}% in 1M)",
+            ("Sharp oil increase raises inflation persistence. Central banks face harder trade-off. "
+             "Net oil importers (India, Turkey, SSA) face CA and currency pressure."),
+            ["CPI surprise prints", "Central bank reaction", "SSA/Turkey CA balance", "Oil futures curve"])
 
-    if oil_regime == "surging" and not _nan(oil_chg):
-        insights.append({
-            "level": "warning",
-            "category": "Energy / Inflation",
-            "headline": f"Oil surging (+{oil_chg*100:.1f}% in 1M)",
-            "detail": (
-                "Sharp oil price increases raise core inflation persistence and complicate central bank policy. "
-                "Net oil importers face the worst trade-off: South Asia, Sub-Saharan Africa, Turkey. "
-                "If sustained >3 months, expect current account deterioration in import-dependent EMs "
-                "and higher-for-longer rates policy in DMs."
-            ),
-            "watch": [
-                "CPI print surprises (core vs headline)", "Central bank reaction functions",
-                "SSA / Turkey current account", "Oil futures curve (backwardation signal)",
-            ],
-        })
-
-    if gold_regime == "surging" and not _nan(gold_chg):
-        insights.append({
-            "level": "warning",
-            "category": "Gold / Safe Haven",
-            "headline": f"Gold surging (+{gold_chg*100:.1f}% in 1M) — stress or de-dollarization?",
-            "detail": (
-                "Gold surging can reflect two distinct regimes: (1) risk-off / macro fear "
-                "(typically accompanied by high VIX and wide credit spreads), or "
-                "(2) structural de-dollarization and central bank accumulation (especially BRICS+ and Gulf SWFs). "
-                "Distinguish by checking whether real rates are falling (inflation hedge) "
-                "or rising (structural demand)."
-            ),
-            "watch": [
-                "Central bank gold purchases (WGC quarterly)", "TIPS real yields",
-                "USD correlation (breaking down = structural demand)",
-                "EM central bank reserve composition",
-            ],
-        })
+    if gold_rg == "surging" and not _nan(gold_chg):
+        add("warning" if not sys_stress else "alert",
+            "Gold / Safe Haven",
+            f"Gold surging (+{gold_chg*100:.1f}% in 1M)"
+            + (" — ALL safe havens bid (systemic stress)" if sys_stress else ""),
+            ("Gold surging alongside USD = flight to ALL safe havens — systemic stress signal. "
+             if sys_stress else
+             "Gold rising can reflect: risk-off fear, falling real rates, or structural central bank accumulation. ") +
+            "Distinguish by checking TIPS real yields.",
+            ["TIPS real yields", "Central bank gold purchases (WGC)", "EM reserve composition",
+             "USD correlation breakdown"])
 
     # ── 6. EM / Africa stress ─────────────────────────────────────────────────
-    embi          = ind.get("embi", np.nan)
-    africa_spread = ind.get("africa_spreads", np.nan)
-    fx_det        = ind.get("fx_res_deteriorating", False)
-    worst_ctry    = ind.get("fx_res_worst_country", "")
-
-    if em_regime in ("stress", "crisis") or (em_widening and dollar_regime in ("strong", "very_strong")):
-        level = "alert" if em_regime == "crisis" else "warning"
-        africa_note = (
-            f" Africa composite spread at {africa_spread:.0f} bps — well above investment-grade threshold."
-            if not _nan(africa_spread) else ""
-        )
-        fx_note = (
-            f" FX reserve drawdowns detected ({worst_ctry} most exposed) — watch import cover ratios."
-            if fx_det else ""
-        )
-        insights.append({
-            "level": level,
-            "category": "EM / Africa Stress",
-            "headline": (
-                f"EM sovereign stress: EMBI {embi:.0f} bps"
-                + (" (widening)" if em_widening else "")
-                + (f" · Africa {africa_spread:.0f} bps" if not _nan(africa_spread) else "")
-            ),
-            "detail": (
-                f"EMBI at {embi:.0f} bps signals elevated refinancing risk across EM. "
-                + ("Combined with strong USD, dollar-denominated debt service costs are rising. " if dollar_regime in ("strong","very_strong") else "") +
-                africa_note + fx_note +
-                " Eurobond maturity walls (2025-2027) for Ghana, Kenya, Ethiopia, Egypt remain critical pressure points."
-            ),
-            "watch": [
-                "IMF Article IV / program status (Ghana, Ethiopia, Egypt)",
-                "Eurobond maturity schedule 2025-2027",
-                "FX reserve adequacy (< 3 months import cover = critical)",
-                "African Development Bank / World Bank budget support",
-            ],
-        })
+    if em_rg in ("stress", "crisis") or (em_wide and dollar_rg in ("strong", "very_strong")):
+        africa_note = (f" Africa composite spread at {africa_sp:.0f} bps." if not _nan(africa_sp) else "")
+        fx_note = (f" FX reserve drawdowns detected ({worst} most exposed)." if fx_det else "")
+        add("alert" if em_rg == "crisis" else "warning",
+            "EM / Africa Stress",
+            (f"EM sovereign stress: EMBI {embi:.0f} bps"
+             + (" (widening)" if em_wide else "")
+             + (f" · Africa {africa_sp:.0f} bps" if not _nan(africa_sp) else "")),
+            (f"EMBI at {embi:.0f} bps signals elevated refinancing risk. "
+             + ("Strong USD amplifies dollar-denominated debt-service costs. " if dollar_rg in ("strong","very_strong") else "")
+             + africa_note + fx_note +
+             " Eurobond maturity walls 2025-2027 for Ghana, Kenya, Ethiopia, Egypt are critical."),
+            ["IMF program status", "Eurobond maturities 2025-2027",
+             "FX reserve import cover (<3M = critical)", "AfDB/World Bank budget support"])
 
     # ── 7. Financial conditions ───────────────────────────────────────────────
-    fin_cond = ind.get("fin_cond_regime", "neutral")
-    hyg_chg  = ind.get("hyg_1m_chg", np.nan)
+    if fin_cond == "tightening" or hy_rg in ("stress", "crisis"):
+        add("warning" if hy_rg != "crisis" else "alert",
+            "Financial Conditions",
+            f"Financial conditions tightening (HY spread {hy:.0f} bps)" if not _nan(hy) else
+            "Financial conditions tightening",
+            ("HY spread widening signals credit stress spreading to riskier borrowers. "
+             "Tighter conditions reduce investment, slow hiring, increase default risk. "
+             "Leveraged loans and private credit portfolios most exposed."),
+            ["HY default rates (Moody's)", "Leveraged loan spreads",
+             "Bank lending standards", "Private credit NAV marks"])
 
-    if fin_cond == "tightening":
-        insights.append({
-            "level": "warning",
-            "category": "Financial Conditions",
-            "headline": f"Financial conditions tightening (HY credit {_fmt_pct(hyg_chg)} in 1M)",
-            "detail": (
-                "High-yield bond spread widening signals credit stress spreading to riskier borrowers. "
-                "Tighter financial conditions reduce business investment, slow hiring, "
-                "and increase default risk in leveraged loans and private credit portfolios. "
-                "Monitor for contagion to IG credit and bank lending conditions."
-            ),
-            "watch": [
-                "HY default rates (Moody's/S&P monthly)", "Leveraged loan spreads",
-                "Private credit NAV marks", "Bank lending standards (Fed SLOOS)",
-            ],
-        })
+    # ── 8. Inflation regime ────────────────────────────────────────────────────
+    if inf_rg in ("high", "very_high"):
+        add("warning" if inf_rg == "high" else "alert",
+            "Inflation Expectations",
+            f"Inflation breakevens elevated (5Y: {be5:.2f}%, 5Y5Y: {be55:.2f}%)"
+            if not (_nan(be5) or _nan(be55)) else "Inflation breakevens elevated",
+            ("Elevated breakevens signal persistent inflation pricing by bond markets. "
+             "Combined with a flat/inverted curve, this signals a stagflationary mix — "
+             "the most difficult environment for central bank policy."),
+            ["Fed/ECB reaction function", "CPI core prints", "Wage data",
+             "Commodity price trajectory"])
 
-    # ── 8. Cross-asset composite regime ──────────────────────────────────────
-    fin_score = ind.get("financial_stress_score", 0)
-    geo_score = ind.get("geo_stress_score", 0)
-    total     = ind.get("total_stress_score", 0)
+    # ── 9. Bond volatility (MOVE proxy) ───────────────────────────────────────
+    if not _nan(move) and ind.get("move_regime") == "elevated":
+        add("warning", "Bond Volatility",
+            f"Bond volatility elevated (MOVE proxy: {move:.0f})",
+            ("High bond volatility signals uncertainty about the rate path — "
+             "typically accompanying fiscal stress, inflation surprises, or central bank pivots. "
+             "Watch for duration positioning unwinds."),
+            ["Treasury auction bid-to-cover", "Pension fund duration hedging",
+             "Fed dot plot dispersion", "Breakeven vol"])
 
-    if fin_score >= 4:
-        insights.append({
-            "level": "alert",
-            "category": "Cross-Asset Regime",
-            "headline": f"Broad-based financial stress ({fin_score}/5 indicators elevated)",
-            "detail": (
-                "Multiple simultaneous financial stress signals historically precede risk-asset drawdowns of 15-25%. "
-                "Current configuration: "
-                + ", ".join(filter(None, [
-                    "inverted curve" if ind.get("curve_regime") == "inverted" else None,
-                    f"VIX {ind.get('vix', 0):.0f}" if ind.get("vix_regime") in ("elevated", "high") else None,
-                    "USD strength" if ind.get("dollar_regime") in ("strong", "very_strong") else None,
-                    "EM stress" if ind.get("em_regime") in ("stress", "crisis") else None,
-                    "credit tightening" if ind.get("fin_cond_regime") == "tightening" else None,
-                ])) + ". Defensive positioning and liquidity management are priorities."
-            ),
-            "watch": [
-                "Cross-asset correlation breakdown", "Repo / money market stress",
-                "Central bank emergency tool activation", "Portfolio margin calls",
-            ],
-        })
-    elif fin_score >= 2 and geo_score >= 2:
-        insights.append({
-            "level": "warning",
-            "category": "Cross-Asset Regime",
-            "headline": "Financial + geopolitical stress converging — stagflation risk elevated",
-            "detail": (
-                "Simultaneous financial market stress and geopolitical tension increases non-linear shock probability. "
-                "The most likely macro path from this configuration is stagflation: "
-                "elevated inflation (from energy/supply disruption) + slowing growth (from tighter financial conditions). "
-                "The hardest policy regime for central banks — and the worst for EM."
-            ),
-            "watch": [
-                "Stagflation scenario probability (inflation breakevens + growth forecasts)",
-                "Energy supply diversification timelines", "EM fiscal buffer adequacy",
-                "Supply-chain relocation acceleration (nearshoring winners)",
-            ],
-        })
+    # ── 10. Cross-asset correlation regime ────────────────────────────────────
+    if corr_rg == "stress":
+        add("warning", "Cross-Asset Regime",
+            "Equity-bond correlation positive — stress regime",
+            ("Positive equity-bond correlation (both selling off together) historically marks "
+             "stagflationary or acute stress regimes where traditional 60/40 diversification breaks down."),
+            ["Real rate trajectory", "Inflation premium vs risk premium",
+             "Gold as alternative diversifier", "Portfolio risk decomposition"])
 
-    # ── If nothing fires, confirm calm ────────────────────────────────────────
-    has_alert_or_warn = any(i["level"] in ("alert", "warning") for i in insights)
-    if not has_alert_or_warn:
-        insights.append({
-            "level": "info",
-            "category": "Regime Assessment",
-            "headline": "No major stress signals — broadly benign macro regime",
-            "detail": (
-                "Current cross-asset configuration is consistent with a late-cycle expansion: "
-                "positive growth signal from copper, manageable volatility, and stable EM spreads. "
-                "This is precisely when complacency sets in — maintain watchful positioning."
-            ),
-            "watch": [
-                "Yield curve slope trend (steepening or flattening?)",
-                "DXY direction (break above 104 = EM warning)",
-                "Copper vs oil divergence (growth vs inflation)",
-                "GPR acceleration (geopolitical risk can shift fast)",
-            ],
-        })
+    # ── 11. Broad composite stress ────────────────────────────────────────────
+    if fin_score >= 5:
+        add("alert", "Cross-Asset Regime",
+            f"Broad-based financial stress ({fin_score}/7 indicators elevated)",
+            ("Multiple simultaneous stress indicators historically precede risk-asset drawdowns of 15-25%. "
+             "Defensive positioning, cash, and duration/safe-haven assets are priorities."),
+            ["Cross-asset correlation", "Repo/money market stress", "Portfolio margin calls",
+             "Central bank emergency tool signals"])
 
-    # Sort: alerts first, then warnings, then info
-    insights.sort(key=lambda x: LEVEL_ORDER.get(x["level"], 9))
-    return insights
+    # ── Default: calm ─────────────────────────────────────────────────────────
+    if not any(i["level"] in ("alert", "warning") for i in out):
+        add("info", "Regime Assessment",
+            "No major stress signals — broadly benign macro regime",
+            ("Current cross-asset configuration is consistent with a mid-to-late cycle expansion. "
+             "Watch for: yield curve slope changes, DXY trend, copper vs oil divergence, "
+             "and any GPR acceleration as early warning signals."),
+            ["Yield curve slope trend", "DXY direction", "Copper/oil divergence", "GPR acceleration"])
+
+    out.sort(key=lambda x: LEVEL_ORDER.get(x["level"], 9))
+    return out
