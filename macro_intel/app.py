@@ -352,7 +352,7 @@ with tabs[1]:
         st.metric("Inflation Regime",       inf_rg.upper() if inf_rg else "N/A")
         st.metric("VIX Term Structure",     vix_ts.upper())
 
-    if fred is not None and "nfci" in fred.columns:
+    if fred is not None and "nfci" in fred:
         st.divider()
         nfci = fred["nfci"].dropna()
         fig_nfci = go.Figure()
@@ -463,9 +463,11 @@ with tabs[3]:
         ship_rg = ind.get("shipping_regime", "")
         st.markdown("**Shipping / Supply Chain**")
         st.metric("Shipping Regime", ship_rg.upper() if ship_rg else "N/A")
-        if ship_df is not None and not ship_df.empty and "bdi" in ship_df.columns:
+        if ship_df is not None and not ship_df.empty:
             fig_ship = go.Figure()
-            fig_ship.add_trace(go.Scatter(x=ship_df.index, y=ship_df["bdi"], name="BDI"))
+            # ship_df is a Series
+            vals = ship_df if isinstance(ship_df, pd.Series) else ship_df.iloc[:, 0]
+            fig_ship.add_trace(go.Scatter(x=vals.index, y=vals, name="BDI"))
             fig_ship.add_hline(y=cfg.THRESH["shipping_stress"], line_dash="dot", line_color="#d35400")
             fig_ship.add_hline(y=cfg.THRESH["shipping_crisis"], line_dash="dot", line_color="#c0392b")
             fig_ship.update_layout(title="Baltic Dry Index", height=220)
@@ -516,9 +518,13 @@ with tabs[4]:
 
     st.divider()
     st.subheader("IMF Macro Indicators")
-    if imf_df is not None and not imf_df.empty:
+    # imf_df is a dict[str, pd.DataFrame]
+    if imf_df is not None and len(imf_df) > 0:
         st.caption(f"Source: {imf_src}")
-        st.dataframe(imf_df.tail(5), use_container_width=True)
+        for label, df_imf in imf_df.items():
+            if df_imf is not None and not df_imf.empty:
+                st.markdown(f"**{label.replace('_', ' ').title()}**")
+                st.dataframe(df_imf.tail(5), use_container_width=True)
     else:
         st.info("IMF DataMapper data unavailable.")
 
@@ -551,7 +557,8 @@ with tabs[4]:
     with col_cyb:
         st.markdown("**Cyber Risk**")
         if cyber is not None and not cyber.empty:
-            st.dataframe(cyber.tail(3), use_container_width=True)
+            disp = cyber.tail(3).to_frame("Cyber Risk Index") if isinstance(cyber, pd.Series) else cyber.tail(3)
+            st.dataframe(disp, use_container_width=True)
         else:
             st.info("Cyber risk data unavailable.")
 
