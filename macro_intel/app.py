@@ -420,9 +420,9 @@ with tabs[2]:
     else:
         st.info("World Bank FX reserve data unavailable.")
 
-    usd_vuln = ind.get("usd_debt_vulnerability", np.nan)
-    if not _nan(usd_vuln):
-        st.metric("USD Debt Vulnerability Score (EM broad)", f"{usd_vuln:.1f}/3")
+    usd_vuln = ind.get("usd_debt_vulnerability", "")
+    if usd_vuln:
+        st.metric("USD Debt Vulnerability (EM broad)", usd_vuln.upper())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
