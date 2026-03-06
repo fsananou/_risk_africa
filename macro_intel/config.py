@@ -95,19 +95,29 @@ WB_INDICATORS = {
     "gdp_usd":     "NY.GDP.MKTP.CD",
     "imports":     "NE.IMP.GNFS.CD",
     "indpro":      "NV.IND.MANF.KD.ZG",
+    "gni_pc":      "NY.GNP.PCAP.CD",   # GNI per capita (income)
+    "debt_service":"DT.TDS.DECT.GN.ZS",# External debt service % GNI
 }
-WB_AFRICA   = ["NGA","ZAF","KEN","EGY","ETH","GHA","TZA","ZMB","MOZ","CIV",
-               "DZA","AGO","SDN","UGA","CMR"]
+WB_AFRICA   = [
+    # Sub-Saharan Africa
+    "AGO","BEN","BWA","BFA","BDI","CMR","CPV","CAF","TCD","COM",
+    "COG","COD","CIV","DJI","GNQ","ERI","SWZ","ETH","GAB","GMB",
+    "GHA","GIN","GNB","KEN","LSO","LBR","MDG","MWI","MLI","MRT",
+    "MUS","MOZ","NAM","NER","NGA","RWA","STP","SEN","SLE","SOM",
+    "ZAF","SSD","SDN","TZA","TGO","UGA","ZMB","ZWE",
+    # North Africa
+    "DZA","EGY","MAR","TUN","LBY",
+]
 WB_EM_BROAD = ["NGA","ZAF","KEN","EGY","GHA","BRA","MEX","IND","IDN","CHN",
                "TUR","ZMB","ARG","CHL","VNM"]
 
 # ── IMF ───────────────────────────────────────────────────────────────────────
 IMF_BASE = "https://www.imf.org/external/datamapper/api/v1"
 IMF_INDICATORS = {
-    "gdp_usd":   "NGDPD",
-    "inflation": "PCPIPCH",
-    "ca_gdp":    "BCA_NGDPD",
-    "gov_debt":  "GGXWDG_NGDP",
+    "gdp_growth": "NGDP_RPCH",     # Real GDP growth %
+    "inflation":  "PCPIPCH",       # CPI inflation %
+    "gov_debt":   "GGXWDG_NGDP",  # Govt debt % GDP
+    "ca_gdp":     "BCA_NGDPD",    # Current account % GDP
 }
 
 # ── EIA (free key: eia.gov/opendata) ──────────────────────────────────────────

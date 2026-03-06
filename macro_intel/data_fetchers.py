@@ -32,7 +32,7 @@ import yfinance as yf
 
 from config import (
     AGSI_EU_URL, EIA_BASE, FAO_FPI_URL, FRED_SERIES,
-    IMF_BASE, OECD_CLI_URL, TICKERS, WB_AFRICA, WB_BASE,
+    IMF_BASE, IMF_INDICATORS, OECD_CLI_URL, TICKERS, WB_AFRICA, WB_BASE,
     WB_CMO_URL, WB_EM_BROAD, WB_INDICATORS, get_eia_key, get_fred_key,
 )
 
@@ -267,16 +267,37 @@ def get_worldbank_ext_debt() -> tuple[pd.DataFrame | None, str]:
     return None, "World Bank External Debt — FAILED"
 
 
+def get_worldbank_gni_per_capita() -> tuple[pd.DataFrame | None, str]:
+    """GNI per capita (current USD) for all Africa countries — World Bank."""
+    df = _worldbank(WB_INDICATORS["gni_pc"], WB_AFRICA, years=8)
+    if df is not None and not df.empty:
+        return df, "World Bank"
+    return None, "World Bank GNI/capita — FAILED"
+
+
+def get_worldbank_debt_service() -> tuple[pd.DataFrame | None, str]:
+    """External debt service as % of GNI for all Africa countries — World Bank."""
+    df = _worldbank(WB_INDICATORS["debt_service"], WB_AFRICA, years=8)
+    if df is not None and not df.empty:
+        return df, "World Bank"
+    return None, "World Bank Debt Service — FAILED"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # IMF
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_imf_macro() -> tuple[dict[str, pd.DataFrame] | None, str]:
-    """IMF DataMapper: inflation, govt debt, current account."""
-    countries = ["US","CN","DE","JP","IN","BR","ZA","NG","EG","TR","GH","KE"]
+    """IMF DataMapper: GDP growth, inflation, govt debt, current account — Africa focus."""
+    # Use ISO2 codes that IMF DataMapper accepts
+    countries = [
+        "DZ","AO","BJ","BW","BF","BI","CM","CV","CF","TD","KM","CG","CD","CI",
+        "DJ","GQ","ER","SZ","ET","GA","GM","GH","GN","GW","KE","LS","LR","LY",
+        "MG","MW","ML","MR","MU","MA","MZ","NA","NE","NG","RW","ST","SN","SL",
+        "SO","ZA","SS","SD","TZ","TG","TN","UG","ZM","ZW","EG",
+    ]
     result = {}
-    for label, ind_id in [("inflation","PCPIPCH"),("gov_debt","GGXWDG_NGDP"),
-                           ("ca_gdp","BCA_NGDPD"),("gdp_usd","NGDPD")]:
+    for label, ind_id in IMF_INDICATORS.items():
         df = _imf(ind_id, countries)
         if df is not None:
             result[label] = df
@@ -705,15 +726,13 @@ def get_gpr_index() -> tuple[pd.Series | None, str]:
             except Exception:
                 pass
 
-    # ── 2. Live fetch from matteoiacoviello.com (XLS) then GitHub CSV mirror ──
-    #
-    # Primary: official XLS (old Excel format — requires xlrd)
-    #   https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls
-    # Fallback: GitHub CSV mirror
-    _GPR_XLS = "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls"
-    _GPR_CSV = "https://raw.githubusercontent.com/pjpmarques/World-Modeling-Datasets/master/GPR/gpr_daily.csv"
+    # ── 2. Live fetch from matteoiacoviello.com ────────────────────────────────
+    import io
+    _HEADERS  = {"User-Agent": "Mozilla/5.0 (compatible; research-bot/1.0)"}
+    _GPR_XLS  = "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls"
+    _GPR_XLSX = "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xlsx"
 
-    def _parse_gpr_df(df: pd.DataFrame, source_label: str):
+    def _parse_gpr_df(df: pd.DataFrame):
         df.columns = [c.strip().lower() for c in df.columns]
         date_col = next((c for c in df.columns if "date" in c), None)
         val_col  = next((c for c in df.columns if "gprd_all" in c or "gprd" in c or "gpr" in c), None)
@@ -722,40 +741,31 @@ def get_gpr_index() -> tuple[pd.Series | None, str]:
             df[val_col]  = pd.to_numeric(df[val_col], errors="coerce")
             s = df.dropna(subset=[date_col, val_col]).set_index(date_col)[val_col].sort_index()
             if len(s) > 10:
-                return s, source_label
-        return None, None
+                return s
+        return None
 
-    # Try XLS (official source — xlrd engine required for .xls)
+    # Try .xls (xlrd engine)
     try:
-        import io
-        resp = requests.get(_GPR_XLS, timeout=_TIMEOUT + 10)
+        resp = requests.get(_GPR_XLS, timeout=_TIMEOUT + 15, headers=_HEADERS)
         resp.raise_for_status()
-        df = pd.read_excel(io.BytesIO(resp.content), engine="xlrd")
-        s, lbl = _parse_gpr_df(df, "Caldara & Iacoviello (GPR) — matteoiacoviello.com")
+        s = _parse_gpr_df(pd.read_excel(io.BytesIO(resp.content), engine="xlrd"))
         if s is not None:
-            return s, lbl
+            return s, "Caldara & Iacoviello (GPR)"
     except Exception:
         pass
 
-    # Try CSV mirror
+    # Try .xlsx fallback (openpyxl engine)
     try:
-        resp = requests.get(_GPR_CSV, timeout=_TIMEOUT)
+        resp = requests.get(_GPR_XLSX, timeout=_TIMEOUT + 15, headers=_HEADERS)
         resp.raise_for_status()
-        import io
-        df = pd.read_csv(io.StringIO(resp.text), on_bad_lines="skip")
-        s, lbl = _parse_gpr_df(df, "Caldara & Iacoviello (GPR) — GitHub mirror")
+        s = _parse_gpr_df(pd.read_excel(io.BytesIO(resp.content), engine="openpyxl"))
         if s is not None:
-            return s, lbl
+            return s, "Caldara & Iacoviello (GPR)"
     except Exception:
         pass
 
-    # ── 3. Fallback: PLACEHOLDER ───────────────────────────────────────────────
-    return (
-        None,
-        "PLACEHOLDER — Caldara & Iacoviello GPR: "
-        "install xlrd (pip install xlrd) — data fetched from "
-        "matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls"
-    )
+    # ── 3. Fallback ────────────────────────────────────────────────────────────
+    return None, "Caldara & Iacoviello GPR — FAILED (fetch error)"
 
 
 def get_lithium_prices() -> tuple[None, str]:

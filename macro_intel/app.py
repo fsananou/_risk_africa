@@ -108,6 +108,31 @@ def _placeholder_box(name: str, reason: str) -> None:
     )
 
 
+def _card(label: str, value: str, note: str = "", color: str = "#2c3e50") -> str:
+    """Horizontal metric card in sig-box style. Returns HTML string."""
+    note_html = (f'&nbsp;<span style="color:#7f8c8d;font-size:0.76rem;">{note}</span>'
+                 if note else "")
+    return (
+        f'<div class="sig-box" style="border-left:5px solid {color};'
+        f'padding:8px 14px;margin:3px 0;">'
+        f'<span style="font-weight:600;font-size:0.86rem;color:#2c3e50;">{label}</span>'
+        f'<span style="float:right;font-size:0.88rem;">'
+        f'<b style="color:{color};">{value}</b>{note_html}</span></div>'
+    )
+
+
+def _regime_color(regime: str) -> str:
+    return {"crisis":"#c0392b","stressed":"#d35400",
+            "cautious":"#b7950b","benign":"#27ae60",
+            "elevated":"#d35400","tight":"#c0392b",
+            "loose":"#27ae60","normal":"#2980b9",
+            "inverted":"#c0392b","flat":"#d35400",
+            "steep":"#27ae60","high":"#c0392b",
+            "moderate":"#d35400","low":"#27ae60",
+            "expanding":"#27ae60","contracting":"#c0392b",
+            "slowing":"#d35400","unknown":"#7f8c8d"}.get(regime.lower(),"#2c3e50")
+
+
 def _sector_card(name: str, data: dict) -> None:
     status = data.get("status","no_data")
     css = {"crisis":"sector-crisis","stress":"sector-stress",
@@ -204,6 +229,12 @@ def load_wb_cmo():    return df_mod.get_wb_cmo()
 @st.cache_data(ttl=3600,  show_spinner=False)
 def load_gpr():       return df_mod.get_gpr_index()
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_wb_gni():    return df_mod.get_worldbank_gni_per_capita()
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_wb_dservice(): return df_mod.get_worldbank_debt_service()
+
 
 with st.spinner("Loading real-world data…"):
     mkt,      mkt_src  = load_market()
@@ -220,6 +251,8 @@ with st.spinner("Loading real-world data…"):
     oecd_cli, oecd_src = load_oecd()
     cmo_data, cmo_src  = load_wb_cmo()
     gpr_data, gpr_src  = load_gpr()
+    gni_data, gni_src  = load_wb_gni()
+    dservice, dsv_src  = load_wb_dservice()
 
 ALL_SOURCES = {
     "Market": mkt_src, "Yields": yld_src, "FRED": fred_src,
@@ -409,20 +442,32 @@ with tabs[1]:
         be5  = ind.get("breakeven5y", np.nan)
         be55 = ind.get("breakeven5y5y", np.nan)
         move = ind.get("move_proxy", np.nan)
-        st.metric("Term Premium (ACM/FRED)", f"{tp:.2f}%"  if not _nan(tp)   else "N/A")
-        st.metric("5Y Breakeven (FRED)",     f"{be5:.2f}%" if not _nan(be5)  else "N/A")
-        st.metric("5Y5Y Forward (FRED)",     f"{be55:.2f}%" if not _nan(be55) else "N/A")
-        st.metric("MOVE proxy (FRED yields)",f"{move:.0f}" if not _nan(move) else "N/A")
+        be5_c  = "#c0392b" if not _nan(be5)  and be5  > 2.8 else "#27ae60" if not _nan(be5)  and be5  < 2.0 else "#2980b9"
+        be55_c = "#c0392b" if not _nan(be55) and be55 > 2.8 else "#27ae60" if not _nan(be55) and be55 < 2.0 else "#2980b9"
+        tp_c   = "#c0392b" if not _nan(tp)   and tp   > 1.0 else "#27ae60" if not _nan(tp)   and tp   < 0   else "#2980b9"
+        cards = "".join([
+            _card("5Y Breakeven",     f"{be5:.2f}%"  if not _nan(be5)  else "N/A",  "FRED", be5_c),
+            _card("5Y5Y Fwd Inflation",f"{be55:.2f}%" if not _nan(be55) else "N/A", "FRED", be55_c),
+            _card("Term Premium",     f"{tp:.2f}%"   if not _nan(tp)   else "N/A",  "FRED", tp_c),
+            _card("MOVE Proxy",       f"{move:.0f}"  if not _nan(move) else "N/A",  "FRED yields", "#2c3e50"),
+        ])
+        st.markdown(cards, unsafe_allow_html=True)
     with c_d:
-        st.markdown("**Regimes**")
-        for label, key in [("Inflation Regime","inflation_regime"),
-                            ("Financial Conditions","fin_cond_regime"),
-                            ("HY Credit Regime","hy_regime"),
-                            ("IP Momentum","indpro_regime"),
-                            ("OECD CLI","oecd_cli_regime"),
-                            ("Corr Regime","correlation_regime")]:
-            v = ind.get(key, "unknown")
-            st.metric(label, v.upper() if v else "N/A")
+        st.markdown("**Regime Dashboard**")
+        regime_items = [
+            ("Inflation",         "inflation_regime"),
+            ("Financial Cond.",   "fin_cond_regime"),
+            ("HY Credit",         "hy_regime"),
+            ("IP Momentum",       "indpro_regime"),
+            ("OECD CLI",          "oecd_cli_regime"),
+            ("Corr Regime",       "correlation_regime"),
+        ]
+        cards = "".join(
+            _card(label, v.upper() if v else "N/A", color=_regime_color(v or "unknown"))
+            for label, key in regime_items
+            for v in [ind.get(key, "unknown")]
+        )
+        st.markdown(cards, unsafe_allow_html=True)
 
     if fred is not None and "nfci" in fred:
         nfci = fred["nfci"].dropna()
@@ -575,88 +620,234 @@ with tabs[3]:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — EM & AFRICA
 # ══════════════════════════════════════════════════════════════════════════════
-with tabs[4]:
-    st.subheader("EM & Africa Stress Map")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("EM Regime",      ind.get("em_regime","unknown").upper())
-        st.metric("EM Equity 1M",   f"{ind.get('eem_1m_chg',np.nan)*100:+.1f}%"
-                  if not _nan(ind.get("eem_1m_chg")) else "N/A")
-        st.metric("EM FX Stress Avg", f"{ind.get('em_fx_stress_avg',np.nan)*100:+.1f}%"
-                  if not _nan(ind.get("em_fx_stress_avg")) else "N/A")
-        st.metric("USD Vulnerability", ind.get("usd_debt_vulnerability","unknown").upper()
-                  if ind.get("usd_debt_vulnerability") else "N/A")
+def _make_africa_choropleth(
+    iso_values: dict,
+    title: str,
+    colorscale: str = "RdYlGn",
+    reversescale: bool = False,
+    suffix: str = "",
+) -> go.Figure:
+    """Build a compact Africa choropleth. iso_values: {ISO3: float}."""
+    locs = list(iso_values.keys())
+    zvals = list(iso_values.values())
+    fig = go.Figure(go.Choropleth(
+        locations=locs,
+        z=zvals,
+        locationmode="ISO-3",
+        colorscale=colorscale,
+        reversescale=reversescale,
+        colorbar=dict(thickness=12, len=0.7, title=dict(text=suffix, side="right")),
+        hovertemplate="<b>%{location}</b><br>" + suffix + " %{z:.1f}<extra></extra>",
+    ))
+    fig.update_geos(
+        scope="africa",
+        showframe=False,
+        showcoastlines=True,
+        coastlinecolor="#cccccc",
+        showland=True,
+        landcolor="#f5f5f5",
+        showocean=True,
+        oceancolor="#eaf3fb",
+        bgcolor="rgba(0,0,0,0)",
+    )
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=13)),
+        height=340,
+        margin=dict(l=0, r=0, t=35, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    return fig
 
-    with c2:
-        if ind.get("fx_res_deteriorating"):
-            st.warning(f"⚠️ FX reserve drawdown: **{ind.get('fx_res_worst_country','unknown')}** most exposed (World Bank)")
+
+def _imf_latest_by_country(imf_data: dict, key: str, current_year: int) -> dict:
+    """Extract most recent value per country from IMF DataMapper result."""
+    df = imf_data.get(key)
+    if df is None or df.empty:
+        return {}
+    # prefer current_year or next year (forecast), fall back to most recent
+    out = {}
+    for iso2 in df.columns:
+        col = df[iso2].dropna()
+        if col.empty:
+            continue
+        # look for current year or forecast
+        for yr in [current_year + 1, current_year, current_year - 1]:
+            matches = col[col.index.year == yr]
+            if not matches.empty:
+                out[iso2] = float(matches.iloc[-1])
+                break
         else:
-            st.success("FX reserves: no acute drawdown detected")
+            out[iso2] = float(col.iloc[-1])
+    # IMF uses ISO2 — remap to ISO3 for choropleth
+    iso2_to_iso3 = {
+        "DZ":"DZA","AO":"AGO","BJ":"BEN","BW":"BWA","BF":"BFA","BI":"BDI",
+        "CM":"CMR","CV":"CPV","CF":"CAF","TD":"TCD","KM":"COM","CG":"COG",
+        "CD":"COD","CI":"CIV","DJ":"DJI","GQ":"GNQ","ER":"ERI","SZ":"SWZ",
+        "ET":"ETH","GA":"GAB","GM":"GMB","GH":"GHA","GN":"GIN","GW":"GNB",
+        "KE":"KEN","LS":"LSO","LR":"LBR","LY":"LBY","MG":"MDG","MW":"MWI",
+        "ML":"MLI","MR":"MRT","MU":"MUS","MA":"MAR","MZ":"MOZ","NA":"NAM",
+        "NE":"NER","NG":"NGA","RW":"RWA","ST":"STP","SN":"SEN","SL":"SLE",
+        "SO":"SOM","ZA":"ZAF","SS":"SSD","SD":"SDN","TZ":"TZA","TG":"TGO",
+        "TN":"TUN","UG":"UGA","ZM":"ZMB","ZW":"ZWE","EG":"EGY",
+    }
+    return {iso2_to_iso3.get(k, k): v for k, v in out.items()}
 
-    # EM FX table
+
+def _wb_latest_by_country(df: pd.DataFrame) -> dict:
+    """Extract latest available value per country from WB annual DataFrame."""
+    if df is None or df.empty:
+        return {}
+    out = {}
+    for iso in df.columns:
+        col = df[iso].dropna()
+        if not col.empty:
+            out[iso] = float(col.iloc[-1])
+    return out
+
+
+def _wb_trend_by_country(df: pd.DataFrame) -> dict:
+    """YoY % change of latest vs prior year. Positive = rising."""
+    if df is None or df.empty:
+        return {}
+    out = {}
+    for iso in df.columns:
+        col = df[iso].dropna()
+        if len(col) >= 2:
+            prev, last = float(col.iloc[-2]), float(col.iloc[-1])
+            if prev != 0:
+                out[iso] = (last - prev) / abs(prev) * 100
+    return out
+
+
+with tabs[4]:
+    st.subheader("EM & Africa — Macro Atlas")
+    _cy = datetime.date.today().year
+
+    # ── Summary cards ──────────────────────────────────────────────────────────
+    em_regime = ind.get("em_regime", "unknown")
+    eem_chg   = ind.get("eem_1m_chg", np.nan)
+    fx_stress = ind.get("em_fx_stress_avg", np.nan)
+    usd_vuln  = ind.get("usd_debt_vulnerability", "unknown")
+
+    summary_cards = "".join([
+        _card("EM Regime",         em_regime.upper(),   color=_regime_color(em_regime)),
+        _card("EM Equity 1M",      f"{eem_chg*100:+.1f}%" if not _nan(eem_chg) else "N/A",
+              "EEM ETF", "#c0392b" if not _nan(eem_chg) and eem_chg < -0.03 else "#27ae60"),
+        _card("EM FX Stress Avg",  f"{fx_stress*100:+.1f}%" if not _nan(fx_stress) else "N/A",
+              "1M avg depreciation",
+              "#c0392b" if not _nan(fx_stress) and fx_stress > 0.03 else "#27ae60"),
+        _card("USD Debt Vulnerability", usd_vuln.upper() if usd_vuln else "N/A",
+              color=_regime_color(usd_vuln or "unknown")),
+    ])
+    c_sum1, c_sum2 = st.columns(2)
+    with c_sum1:
+        st.markdown(summary_cards, unsafe_allow_html=True)
+    with c_sum2:
+        # EM FX cards
+        st.markdown("**EM FX Performance — Yahoo Finance**")
+        if mkt is not None:
+            fx_pairs = {
+                "USD/BRL":"usdbrl","USD/ZAR":"usdzar","USD/TRY":"usdtry",
+                "USD/CNH":"usdcnh","USD/INR":"usdinr","USD/MXN":"usdmxn",
+            }
+            cells = []
+            for label, key in fx_pairs.items():
+                s = mkt.get(key)
+                if s is not None and len(s) >= 22:
+                    last = float(s.iloc[-1])
+                    chg_1m = last / float(s.iloc[-22]) - 1
+                    color = "#c0392b" if chg_1m > 0.01 else "#27ae60" if chg_1m < -0.01 else "#2c3e50"
+                    cells.append(
+                        f'<div class="sig-box" style="border-left:5px solid {color};'
+                        f'padding:6px 14px;margin:3px 0;">'
+                        f'<span style="font-weight:700;font-size:0.86rem;">{label}</span>'
+                        f'<span style="float:right;">{last:.4f}'
+                        f'&nbsp;&nbsp;<b style="color:{color};">{chg_1m*100:+.1f}%</b></span></div>'
+                    )
+            if cells:
+                st.markdown("".join(cells), unsafe_allow_html=True)
+
+    # ── Eurobond alert ─────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="sig-box sig-warning" style="margin:10px 0 4px 0;">'
+        '<div class="sig-title">📌 Eurobond Maturity Wall 2025–2027</div>'
+        '<div class="sig-body">Ghana, Kenya, Ethiopia, Egypt each face significant Eurobond '
+        'redemptions. Monitor FX reserve cover and IMF program status.</div></div>',
+        unsafe_allow_html=True,
+    )
+
     st.divider()
-    st.markdown("**EM FX Performance — Yahoo Finance**")
-    if mkt is not None:
-        fx_pairs = {
-            "USD/BRL":"usdbrl","USD/ZAR":"usdzar","USD/TRY":"usdtry",
-            "USD/CNH":"usdcnh","USD/INR":"usdinr","USD/MXN":"usdmxn",
-        }
-        rows = []
-        for label, key in fx_pairs.items():
-            s = mkt.get(key)
-            if s is not None and len(s) >= 22:
-                last = float(s.iloc[-1])
-                chg_1m = last / float(s.iloc[-22]) - 1
-                color = "#c0392b" if chg_1m > 0.01 else "#27ae60" if chg_1m < -0.01 else "#2c3e50"
-                rows.append({"pair": label, "latest": f"{last:.4f}",
-                             "chg": chg_1m, "chg_fmt": f"{chg_1m*100:+.1f}%", "color": color})
-        if rows:
-            cells = "".join(
-                f'<div class="sig-box" style="border-left:5px solid {r["color"]};padding:8px 14px;margin:3px 0;">'
-                f'<span style="font-weight:700;font-size:0.9rem;">{r["pair"]}</span>'
-                f'<span style="float:right;font-size:0.9rem;">{r["latest"]}'
-                f'&nbsp;&nbsp;<b style="color:{r["color"]};">{r["chg_fmt"]}</b></span></div>'
-                for r in rows
+
+    # ── 4 Choropleth maps ──────────────────────────────────────────────────────
+    st.markdown("#### Africa Macro Atlas — IMF & World Bank")
+    st.caption(f"IMF forecasts · World Bank annual data · Data as of latest available · Current year reference: {_cy}")
+
+    # Map 1 & 2: GDP Growth + CPI
+    mc1, mc2 = st.columns(2)
+    with mc1:
+        gdp_map = _imf_latest_by_country(imf_data, "gdp_growth", _cy) if imf_data else {}
+        if gdp_map:
+            fig = _make_africa_choropleth(
+                gdp_map, f"GDP Real Growth % — IMF ({_cy} forecast)",
+                colorscale="RdYlGn", reversescale=False, suffix="%",
             )
-            st.markdown(cells, unsafe_allow_html=True)
-    else:
-        _placeholder_box("EM FX", mkt_src)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("GDP growth data unavailable")
+    with mc2:
+        cpi_map = _imf_latest_by_country(imf_data, "inflation", _cy) if imf_data else {}
+        if cpi_map:
+            fig = _make_africa_choropleth(
+                cpi_map, f"CPI Inflation % — IMF ({_cy} forecast)",
+                colorscale="RdYlGn", reversescale=True, suffix="%",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("CPI data unavailable")
 
-    # FX Reserves chart
-    st.divider()
-    st.markdown("**FX Reserves — World Bank**")
-    if fx_res is not None and not fx_res.empty:
-        fig = go.Figure()
-        for iso in (africa_focus or cfg.WB_AFRICA[:5]):
-            if iso in fx_res.columns:
-                fig.add_trace(go.Scatter(x=fx_res.index, y=fx_res[iso],
-                                         mode="lines+markers", name=iso))
-        fig.update_layout(title=f"FX Reserves (World Bank) — {wb_r_src}",
-                          yaxis_title="USD", height=300)
+    # Map 3 & 4: FX Reserves trend + Debt Service
+    mc3, mc4 = st.columns(2)
+    with mc3:
+        fx_trend = _wb_trend_by_country(fx_res) if fx_res is not None else {}
+        if fx_trend:
+            fig = _make_africa_choropleth(
+                fx_trend, "FX Reserves — YoY Change % (World Bank)",
+                colorscale="RdYlGn", reversescale=False, suffix="%",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("FX reserve trend data unavailable")
+    with mc4:
+        dsv_map = _wb_latest_by_country(dservice) if dservice is not None else {}
+        if dsv_map:
+            fig = _make_africa_choropleth(
+                dsv_map, "Debt Service as % of GNI (World Bank)",
+                colorscale="RdYlGn", reversescale=True, suffix="%GNI",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("Debt service data unavailable")
+
+    # Map 5: GNI per capita (income / poverty proxy)
+    gni_map = _wb_latest_by_country(gni_data) if gni_data is not None else {}
+    if gni_map:
+        st.markdown("#### Income Level — GNI per Capita (World Bank, current USD)")
+        fig = _make_africa_choropleth(
+            gni_map, "GNI per Capita (USD) — World Bank",
+            colorscale="Viridis", reversescale=False, suffix="USD",
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-    # IMF data
-    st.divider()
-    st.markdown("**IMF Macro Indicators — IMF DataMapper**")
-    if imf_data is not None and len(imf_data) > 0:
-        for label, df_imf in imf_data.items():
-            if df_imf is None or df_imf.empty:
-                continue
-            recent = df_imf.tail(3)
-            # Show as a compact horizontal metric strip
-            header = f"**{label.replace('_',' ').title()}** (IMF)"
-            st.markdown(header)
-            metric_cols = st.columns(min(len(recent.columns), 6))
-            for ci, iso in enumerate(recent.columns[:6]):
-                vals = recent[iso].dropna()
-                if not vals.empty:
-                    v = float(vals.iloc[-1])
-                    yr = str(vals.index[-1].year) if hasattr(vals.index[-1], "year") else ""
-                    metric_cols[ci].metric(f"{iso} ({yr})", f"{v:.1f}")
-
-    st.info("📌 **Eurobond maturity wall 2025–2027**: Ghana, Kenya, Ethiopia, Egypt each face "
-            "significant Eurobond redemptions. Monitor FX reserve cover and IMF program status.")
+    # Govt debt map
+    debt_map = _imf_latest_by_country(imf_data, "gov_debt", _cy) if imf_data else {}
+    if debt_map:
+        st.markdown("#### Govt Debt % GDP — IMF")
+        fig = _make_africa_choropleth(
+            debt_map, f"Government Debt % GDP — IMF ({_cy})",
+            colorscale="RdYlGn", reversescale=True, suffix="%GDP",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -669,28 +860,47 @@ with tabs[5]:
     c1, c2, c3 = st.columns(3)
     with c1:
         st.markdown("**VIX & Volatility**")
-        st.metric("VIX",              f"{ind.get('vix',np.nan):.1f}" if not _nan(ind.get("vix")) else "N/A")
-        st.metric("VIX Regime",       ind.get("vix_regime","unknown").upper())
-        st.metric("VIX Term Structure",ind.get("vix_term_structure","unknown").upper())
-        st.metric("MOVE Proxy",       f"{ind.get('move_proxy',np.nan):.0f}" if not _nan(ind.get("move_proxy")) else "N/A")
+        vix = ind.get("vix", np.nan)
+        vix_regime = ind.get("vix_regime", "unknown")
+        vix_c = "#c0392b" if not _nan(vix) and vix > 25 else "#d35400" if not _nan(vix) and vix > 18 else "#27ae60"
+        st.markdown("".join([
+            _card("VIX",               f"{vix:.1f}" if not _nan(vix) else "N/A", color=vix_c),
+            _card("VIX Regime",        vix_regime.upper(), color=_regime_color(vix_regime)),
+            _card("VIX Term Structure",ind.get("vix_term_structure","unknown").upper(),
+                  color=_regime_color(ind.get("vix_term_structure","unknown"))),
+            _card("MOVE Proxy",        f"{ind.get('move_proxy',np.nan):.0f}" if not _nan(ind.get("move_proxy")) else "N/A",
+                  "FRED yields", "#2c3e50"),
+        ]), unsafe_allow_html=True)
 
     with c2:
         st.markdown("**Inflation Expectations (FRED)**")
         be5  = ind.get("breakeven5y",   np.nan)
         be55 = ind.get("breakeven5y5y", np.nan)
         tp   = ind.get("term_premium",  np.nan)
-        st.metric("5Y Breakeven",   f"{be5:.2f}%"  if not _nan(be5)  else "N/A")
-        st.metric("5Y5Y Forward",   f"{be55:.2f}%" if not _nan(be55) else "N/A")
-        st.metric("Term Premium",   f"{tp:.2f}%"   if not _nan(tp)   else "N/A")
-        st.metric("Inflation Regime",ind.get("inflation_regime","unknown").upper())
+        inf_regime = ind.get("inflation_regime","unknown")
+        be5_c  = "#c0392b" if not _nan(be5)  and be5  > 2.8 else "#27ae60" if not _nan(be5)  and be5  < 2.0 else "#2980b9"
+        be55_c = "#c0392b" if not _nan(be55) and be55 > 2.8 else "#27ae60" if not _nan(be55) and be55 < 2.0 else "#2980b9"
+        st.markdown("".join([
+            _card("5Y Breakeven",    f"{be5:.2f}%"  if not _nan(be5)  else "N/A", "FRED", be5_c),
+            _card("5Y5Y Forward",    f"{be55:.2f}%" if not _nan(be55) else "N/A", "FRED", be55_c),
+            _card("Term Premium",    f"{tp:.2f}%"   if not _nan(tp)   else "N/A", "FRED", "#2980b9"),
+            _card("Inflation Regime",inf_regime.upper(), color=_regime_color(inf_regime)),
+        ]), unsafe_allow_html=True)
 
     with c3:
         st.markdown("**Cross-Asset Signals**")
-        st.metric("Eq-Bond Correlation", f"{ind.get('eq_bond_corr',np.nan):.2f}"
-                  if not _nan(ind.get("eq_bond_corr")) else "N/A")
-        st.metric("Correlation Regime",  ind.get("correlation_regime","unknown").upper())
-        st.metric("Cu/Gold Regime",      ind.get("copper_gold_regime","unknown").upper())
-        st.metric("Systemic Stress",     "YES ⚠️" if ind.get("systemic_stress_signal") else "No")
+        corr = ind.get("eq_bond_corr", np.nan)
+        corr_regime  = ind.get("correlation_regime","unknown")
+        cu_regime    = ind.get("copper_gold_regime","unknown")
+        systemic     = ind.get("systemic_stress_signal", False)
+        systemic_c   = "#c0392b" if systemic else "#27ae60"
+        st.markdown("".join([
+            _card("Eq–Bond Corr",     f"{corr:.2f}" if not _nan(corr) else "N/A",
+                  color="#c0392b" if not _nan(corr) and corr > 0.3 else "#27ae60"),
+            _card("Correlation Regime",corr_regime.upper(), color=_regime_color(corr_regime)),
+            _card("Cu/Gold Regime",    cu_regime.upper(), color=_regime_color(cu_regime)),
+            _card("Systemic Stress",   "YES ⚠️" if systemic else "No", color=systemic_c),
+        ]), unsafe_allow_html=True)
 
     # EEM vs EMB chart
     if mkt is not None:
