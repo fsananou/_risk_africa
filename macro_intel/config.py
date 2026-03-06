@@ -102,7 +102,7 @@ WB_INDICATORS = {
     "imports":     "NE.IMP.GNFS.CD",
     "indpro":      "NV.IND.MANF.KD.ZG",
     "gni_pc":      "NY.GNP.PCAP.CD",   # GNI per capita (income)
-    "debt_service":"DT.TDS.DECT.GN.ZS",# External debt service % GNI
+    "debt_service":"GC.XPN.INTP.ZS",   # Govt interest payments % of revenue
 }
 WB_AFRICA   = [
     # Sub-Saharan Africa

@@ -379,7 +379,7 @@ def get_worldbank_gni_per_capita() -> tuple[pd.DataFrame | None, str]:
 
 
 def get_worldbank_debt_service() -> tuple[pd.DataFrame | None, str]:
-    """External debt service as % of GNI for all Africa countries — World Bank."""
+    """Govt interest payments as % of fiscal revenue for all Africa countries — World Bank."""
     df = _worldbank(WB_INDICATORS["debt_service"], WB_AFRICA, years=8)
     if df is not None and not df.empty:
         return df, "World Bank"

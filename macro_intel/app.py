@@ -866,22 +866,12 @@ with tabs[4]:
         dsv_map = _wb_latest_by_country(dservice) if dservice is not None else {}
         if dsv_map:
             fig = _make_africa_choropleth(
-                dsv_map, "Debt Service as % of GNI (World Bank)",
-                colorscale="RdYlGn", reversescale=True, suffix="%GNI",
+                dsv_map, "Govt Interest Payments % of Fiscal Revenue (World Bank)",
+                colorscale="RdYlGn", reversescale=True, suffix="%Rev",
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.caption("Debt service data unavailable")
-
-    # Map 5: GNI per capita (income / poverty proxy)
-    gni_map = _wb_latest_by_country(gni_data) if gni_data is not None else {}
-    if gni_map:
-        st.markdown("#### Income Level — GNI per Capita (World Bank, current USD)")
-        fig = _make_africa_choropleth(
-            gni_map, "GNI per Capita (USD) — World Bank",
-            colorscale="Viridis", reversescale=False, suffix="USD",
-        )
-        st.plotly_chart(fig, use_container_width=True)
+            st.caption("Debt service to revenue data unavailable")
 
     # Govt debt map
     debt_map = _imf_latest_by_country(imf_data, "gov_debt", _cy) if imf_data else {}
