@@ -43,9 +43,8 @@ _TIMEOUT = 15  # HTTP timeout in seconds
 # Low-level API helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _fred(series_id: str, start: str = "2018-01-01") -> pd.Series | None:
+def _fred(series_id: str, key: str, start: str = "2018-01-01") -> pd.Series | None:
     """Fetch a single FRED series. Returns None if key missing or request fails."""
-    key = get_fred_key()
     if not key:
         return None
     try:
@@ -164,16 +163,17 @@ def get_market_data(period: str = "1y") -> tuple[dict[str, pd.Series] | None, st
 # Yield curve
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_yields() -> tuple[pd.DataFrame | None, str]:
+def get_yields(key: str = "") -> tuple[pd.DataFrame | None, str]:
     """US Treasury yields: FRED → Treasury Direct → None."""
-    key = get_fred_key()
+    if not key:
+        key = get_fred_key() or ""
     if key:
         series = {
             "3M": FRED_SERIES["us3m"], "2Y": FRED_SERIES["us2y"],
             "5Y": FRED_SERIES["us5y"], "10Y": FRED_SERIES["us10y"],
             "30Y": FRED_SERIES["us30y"],
         }
-        frames = {label: _fred(sid) for label, sid in series.items()}
+        frames = {label: _fred(sid, key) for label, sid in series.items()}
         valid  = {k: v for k, v in frames.items() if v is not None}
         if len(valid) >= 3:
             return pd.DataFrame(valid).dropna(how="all"), "FRED"
@@ -193,12 +193,13 @@ def get_yields() -> tuple[pd.DataFrame | None, str]:
 # FRED macro series
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_fred_macro() -> tuple[dict[str, pd.Series] | None, str]:
+def get_fred_macro(key: str = "") -> tuple[dict[str, pd.Series] | None, str]:
     """
     FRED: breakevens, HY/IG spreads, NFCI, term premium.
     Returns (dict_of_series, source) or (None, ...) if no key.
     """
-    key = get_fred_key()
+    if not key:
+        key = get_fred_key() or ""
     if not key:
         return None, "FRED — NO API KEY (get free key at fred.stlouisfed.org)"
 
@@ -218,7 +219,7 @@ def get_fred_macro() -> tuple[dict[str, pd.Series] | None, str]:
     }
     result = {}
     for name, sid in mapping.items():
-        s = _fred(sid)
+        s = _fred(sid, key)
         if s is not None:
             result[name] = s
 
@@ -288,12 +289,13 @@ def get_imf_macro() -> tuple[dict[str, pd.DataFrame] | None, str]:
 # EIA (US Energy Information Administration)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_eia_oil_inventories() -> tuple[pd.Series | None, str]:
+def get_eia_oil_inventories(key: str = "") -> tuple[pd.Series | None, str]:
     """
     US crude oil weekly stocks (thousand barrels) — EIA API v2.
     Free API key required: eia.gov/opendata
     """
-    key = get_eia_key()
+    if not key:
+        key = get_eia_key() or ""
     if not key:
         return None, "EIA — NO API KEY (get free key at eia.gov/opendata)"
     try:
@@ -325,12 +327,13 @@ def get_eia_oil_inventories() -> tuple[pd.Series | None, str]:
         return None, f"EIA — FAILED ({type(e).__name__})"
 
 
-def get_eia_gas_storage_us() -> tuple[pd.Series | None, str]:
+def get_eia_gas_storage_us(key: str = "") -> tuple[pd.Series | None, str]:
     """
     US natural gas weekly storage (billion cubic feet) — EIA API v2.
     Free API key required.
     """
-    key = get_eia_key()
+    if not key:
+        key = get_eia_key() or ""
     if not key:
         return None, "EIA — NO API KEY"
     try:

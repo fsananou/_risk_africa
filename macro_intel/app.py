@@ -166,16 +166,16 @@ _EIA_KEY  = cfg.get_eia_key()  or ""
 def load_market():              return df_mod.get_market_data()
 
 @st.cache_data(ttl=3600,  show_spinner=False)
-def load_yields(fk: str):       return df_mod.get_yields()
+def load_yields(fk: str):       return df_mod.get_yields(fk)
 
 @st.cache_data(ttl=3600,  show_spinner=False)
-def load_fred(fk: str):         return df_mod.get_fred_macro()
+def load_fred(fk: str):         return df_mod.get_fred_macro(fk)
 
 @st.cache_data(ttl=3600,  show_spinner=False)
-def load_eia_oil(ek: str):      return df_mod.get_eia_oil_inventories()
+def load_eia_oil(ek: str):      return df_mod.get_eia_oil_inventories(ek)
 
 @st.cache_data(ttl=3600,  show_spinner=False)
-def load_eia_gas(ek: str):      return df_mod.get_eia_gas_storage_us()
+def load_eia_gas(ek: str):      return df_mod.get_eia_gas_storage_us(ek)
 
 @st.cache_data(ttl=3600,  show_spinner=False)
 def load_eu_gas():    return df_mod.get_eu_gas_storage()
