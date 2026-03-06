@@ -783,3 +783,107 @@ def get_cobalt_prices() -> tuple[None, str]:
     No free real-time public API.
     """
     return None, "PLACEHOLDER — LME cobalt (subscription required)"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# News Feed (RSS — free, no key)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# category → list of (name, url)
+_NEWS_SOURCES: dict[str, list[tuple[str, str]]] = {
+    "Global Markets": [
+        ("Reuters Business",  "https://feeds.reuters.com/reuters/businessNews"),
+        ("BBC Business",      "https://feeds.bbci.co.uk/news/business/rss.xml"),
+        ("FT",                "https://www.ft.com/rss/home"),
+        ("FT Markets",        "https://www.ft.com/rss/home/markets"),
+        ("CNBC World",        "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
+        ("Politico Economy",  "https://rss.politico.com/economy.xml"),
+        ("Axios Markets",     "https://api.axios.com/feed/rss/finance"),
+        ("The Economist",     "https://www.economist.com/finance-and-economics/rss.xml"),
+    ],
+    "Emerging Markets": [
+        ("Reuters EM",        "https://feeds.reuters.com/reuters/emergingMarketsNews"),
+        ("Nikkei Asia",       "https://asia.nikkei.com/rss/feed/nar"),
+        ("Al-Monitor",        "https://www.al-monitor.com/rss"),
+    ],
+    "Africa": [
+        ("The Africa Report", "https://www.theafricareport.com/feed/"),
+        ("African Business",  "https://african.business/feed/"),
+        ("AllAfrica Economy", "https://allafrica.com/tools/headlines/rdf/economy/headlines.rdf"),
+        ("Reuters Africa",    "https://feeds.reuters.com/reuters/AFRICATopNews"),
+        ("Business Day (ZA)", "https://www.businesslive.co.za/rss/bd/"),
+    ],
+}
+
+_NEWS_COLORS = {
+    "Reuters Business":  "#d35400",
+    "BBC Business":      "#c0392b",
+    "FT":                "#1a3c5e",
+    "FT Markets":        "#1a3c5e",
+    "CNBC World":        "#2980b9",
+    "Politico Economy":  "#0f4c81",
+    "Axios Markets":     "#6c3483",
+    "The Economist":     "#E3120B",
+    "Reuters EM":        "#e67e22",
+    "Nikkei Asia":       "#c0392b",
+    "Al-Monitor":        "#27ae60",
+    "The Africa Report": "#8e44ad",
+    "African Business":  "#16a085",
+    "AllAfrica Economy": "#2c3e50",
+    "Reuters Africa":    "#d35400",
+    "Business Day (ZA)": "#1abc9c",
+}
+
+
+def get_news_feed() -> tuple[dict[str, list[dict]] | None, str]:
+    """
+    Financial news headlines via free RSS feeds.
+    Returns dict: {category: [items]} where each item has
+    {source, color, title, link, published, summary}.
+    """
+    import re
+    import email.utils
+    import feedparser
+
+    _strip = re.compile(r"<[^>]+>")
+
+    result: dict[str, list[dict]] = {}
+    fetched: list[str] = []
+
+    for category, sources in _NEWS_SOURCES.items():
+        cat_items: list[dict] = []
+        seen_titles: set[str] = set()
+        for source_name, url in sources:
+            try:
+                feed = feedparser.parse(url)
+                for entry in feed.entries[:7]:
+                    title = entry.get("title", "").strip()
+                    if not title or title in seen_titles:
+                        continue
+                    seen_titles.add(title)
+                    pub_raw = entry.get("published", "") or entry.get("updated", "")
+                    try:
+                        pub_dt = email.utils.parsedate_to_datetime(pub_raw)
+                        pub_str = pub_dt.strftime("%d %b %H:%M")
+                    except Exception:
+                        pub_str = pub_raw[:16]
+                    summary = entry.get("summary", "") or entry.get("description", "")
+                    summary = _strip.sub(" ", summary).strip()[:240]
+                    cat_items.append({
+                        "source":    source_name,
+                        "color":     _NEWS_COLORS.get(source_name, "#2c3e50"),
+                        "title":     title,
+                        "link":      entry.get("link", ""),
+                        "published": pub_str,
+                        "summary":   summary,
+                    })
+                if feed.entries:
+                    fetched.append(source_name)
+            except Exception:
+                pass
+        if cat_items:
+            result[category] = cat_items
+
+    if result:
+        return result, f"RSS ({', '.join(fetched[:6])}{'…' if len(fetched) > 6 else ''})"
+    return None, "News RSS — FAILED"

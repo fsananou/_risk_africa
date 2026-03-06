@@ -77,6 +77,12 @@ TICKERS = {
     "emb":    "EMB",     "tip":    "TIP",     "lqd":    "LQD",
     "xlf":    "XLF",     "xle":    "XLE",     "xlb":    "XLB",
     "xli":    "XLI",
+    # Global indexes (World Pulse)
+    "ndx":    "^IXIC",   "dax":    "^GDAXI",  "ftse":   "^FTSE",
+    "n225":   "^N225",   "hsi":    "^HSI",    "cac40":  "^FCHI",
+    "sensex": "^BSESN",  "bovespa":"^BVSP",   "jse":    "J203.JO",
+    # G10 FX extras
+    "gbpusd": "GBPUSD=X","audusd": "AUDUSD=X",
 }
 
 # ── World Bank CMO (Commodity Markets Outlook) ───────────────────────────────

@@ -235,6 +235,9 @@ def load_wb_gni():    return df_mod.get_worldbank_gni_per_capita()
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_wb_dservice(): return df_mod.get_worldbank_debt_service()
 
+@st.cache_data(ttl=900,   show_spinner=False)
+def load_news():      return df_mod.get_news_feed()
+
 
 with st.spinner("Loading real-world data…"):
     mkt,      mkt_src  = load_market()
@@ -253,6 +256,7 @@ with st.spinner("Loading real-world data…"):
     gpr_data, gpr_src  = load_gpr()
     gni_data, gni_src  = load_wb_gni()
     dservice, dsv_src  = load_wb_dservice()
+    news,     news_src = load_news()
 
 ALL_SOURCES = {
     "Market": mkt_src, "Yields": yld_src, "FRED": fred_src,
@@ -298,23 +302,61 @@ st.markdown(f"**Data sources:** {badges}", unsafe_allow_html=True)
 st.divider()
 
 
-# ── Pulse KPIs ─────────────────────────────────────────────────────────────────
-def _kpi(col, label, val, fmt=".1f", suffix=""):
-    v = f"{val:{fmt}}{suffix}" if not _nan(val) else "N/A"
-    col.metric(label, v)
+# ── Pulse KPI cards ────────────────────────────────────────────────────────────
+def _pulse_card(label: str, value: str, color: str) -> str:
+    return (
+        f'<div class="sig-box" style="border-left:5px solid {color};'
+        f'padding:10px 14px;margin:0 4px 0 0;text-align:center;min-width:0;">'
+        f'<div style="font-size:0.72rem;color:#7f8c8d;font-weight:600;'
+        f'text-transform:uppercase;letter-spacing:0.05em;">{label}</div>'
+        f'<div style="font-weight:700;font-size:1.1rem;color:{color};'
+        f'margin-top:2px;">{value}</div>'
+        f'</div>'
+    )
 
-kpi = st.columns(9)
-_kpi(kpi[0], "VIX",       ind.get("vix",          np.nan))
-_kpi(kpi[1], "DXY",       ind.get("dxy",          np.nan))
-_kpi(kpi[2], "Curve",     ind.get("curve_slope",  np.nan), fmt="+.0f", suffix=" bps")
-_kpi(kpi[3], "Brent",     ind.get("brent",        np.nan), suffix=" $/bbl")
-_kpi(kpi[4], "Copper 1M", ind.get("copper_1m_chg", np.nan) * 100 if not _nan(ind.get("copper_1m_chg")) else np.nan, fmt="+.1f", suffix="%")
-_kpi(kpi[5], "HY Spread", ind.get("hy_spread",    np.nan), fmt=".0f",  suffix=" bps")
-eu_g = ind.get("eu_gas_storage_pct", np.nan)
-_kpi(kpi[6], "EU Gas",    eu_g,                           fmt=".1f",  suffix="% full")
-fao  = ind.get("fao_fpi",  np.nan)
-_kpi(kpi[7], "FAO FPI",   fao,                            fmt=".0f")
-_kpi(kpi[8], "OECD CLI",  ind.get("oecd_cli_oecdall", np.nan), fmt=".1f")
+vix_v      = ind.get("vix", np.nan)
+dxy_v      = ind.get("dxy", np.nan)
+curve_v    = ind.get("curve_slope", np.nan)
+brent_v    = ind.get("brent", np.nan)
+cu_chg     = ind.get("copper_1m_chg", np.nan)
+hy_v       = ind.get("hy_spread", np.nan)
+eu_g       = ind.get("eu_gas_storage_pct", np.nan)
+fao_v      = ind.get("fao_fpi", np.nan)
+oecd_v     = ind.get("oecd_cli_oecdall", np.nan)
+
+_pulse_items = [
+    ("VIX",
+     f"{vix_v:.1f}" if not _nan(vix_v) else "N/A",
+     "#c0392b" if not _nan(vix_v) and vix_v > 25 else "#d35400" if not _nan(vix_v) and vix_v > 18 else "#27ae60"),
+    ("DXY",
+     f"{dxy_v:.1f}" if not _nan(dxy_v) else "N/A",
+     "#c0392b" if not _nan(dxy_v) and dxy_v > 106 else "#d35400" if not _nan(dxy_v) and dxy_v > 103 else "#2980b9"),
+    ("2Y–10Y Spread",
+     f"{curve_v:+.0f} bps" if not _nan(curve_v) else "N/A",
+     "#c0392b" if not _nan(curve_v) and curve_v < -10 else "#d35400" if not _nan(curve_v) and curve_v < 50 else "#27ae60"),
+    ("Brent",
+     f"{brent_v:.1f} $/bbl" if not _nan(brent_v) else "N/A",
+     "#d35400"),
+    ("Copper 1M",
+     f"{cu_chg*100:+.1f}%" if not _nan(cu_chg) else "N/A",
+     "#c0392b" if not _nan(cu_chg) and cu_chg < -0.07 else "#27ae60" if not _nan(cu_chg) and cu_chg > 0.07 else "#2c3e50"),
+    ("HY Spread",
+     f"{hy_v:.0f} bps" if not _nan(hy_v) else "N/A",
+     "#c0392b" if not _nan(hy_v) and hy_v > 500 else "#d35400" if not _nan(hy_v) and hy_v > 350 else "#27ae60"),
+    ("EU Gas",
+     f"{eu_g:.1f}% full" if not _nan(eu_g) else "N/A",
+     "#c0392b" if not _nan(eu_g) and eu_g < 20 else "#d35400" if not _nan(eu_g) and eu_g < 40 else "#27ae60"),
+    ("FAO FPI",
+     f"{fao_v:.0f}" if not _nan(fao_v) else "N/A",
+     "#c0392b" if not _nan(fao_v) and fao_v > 160 else "#d35400" if not _nan(fao_v) and fao_v > 130 else "#27ae60"),
+    ("OECD CLI",
+     f"{oecd_v:.1f}" if not _nan(oecd_v) else "N/A",
+     "#27ae60" if not _nan(oecd_v) and oecd_v > 100 else "#d35400"),
+]
+
+pulse_cols = st.columns(len(_pulse_items))
+for col, (label, value, color) in zip(pulse_cols, _pulse_items):
+    col.markdown(_pulse_card(label, value, color), unsafe_allow_html=True)
 st.divider()
 
 
@@ -328,9 +370,11 @@ tabs = st.tabs([
     "🔮 6. Market-Implied",
     "⚡ 7. Sectors",
     "🔗 8. Sector Dependencies",
-    "📰 9. Weekly Note",
-    "📋 10. Daily Note",
-    "⏱️ 11. Hourly Note",
+    "🌐 9. World Pulse",
+    "📡 10. News Feed",
+    "📰 11. Weekly Note",
+    "📋 12. Daily Note",
+    "⏱️ 13. Hourly Note",
 ])
 
 
@@ -1117,9 +1161,263 @@ with tabs[7]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 9 — WEEKLY NOTE
+# TAB 9 — WORLD PULSE
 # ══════════════════════════════════════════════════════════════════════════════
-with tabs[8]:  # noqa: E741 — index 8 = tab 9
+_INDEX_META = {
+    "spx":    ("S&P 500",        "#1f77b4"),
+    "ndx":    ("NASDAQ",         "#ff7f0e"),
+    "dax":    ("DAX",            "#2ca02c"),
+    "ftse":   ("FTSE 100",       "#d62728"),
+    "n225":   ("Nikkei 225",     "#9467bd"),
+    "hsi":    ("Hang Seng",      "#8c564b"),
+    "cac40":  ("CAC 40",         "#e377c2"),
+    "sensex": ("Sensex",         "#bcbd22"),
+    "bovespa":("Bovespa",        "#17becf"),
+    "eem":    ("EM Equity ETF",  "#aec7e8"),
+}
+_CMDTY_META = {
+    "gold":   ("Gold",    "#f39c12"),
+    "brent":  ("Brent",   "#2c3e50"),
+    "copper": ("Copper",  "#e74c3c"),
+    "wheat":  ("Wheat",   "#27ae60"),
+}
+
+with tabs[8]:
+    st.subheader("🌐 World Pulse — Global Markets at a Glance")
+    st.caption(f"Source: Yahoo Finance · 1-year performance indexed to 100 · Updated: {last_updated}")
+
+    if mkt is None:
+        st.warning("Market data unavailable.")
+    else:
+        # ── Global Equity Indexes ──────────────────────────────────────────────
+        st.markdown("#### Global Equity Indexes — 1Y Performance (Indexed to 100)")
+        fig_eq = go.Figure()
+        for key, (label, color) in _INDEX_META.items():
+            s = mkt.get(key)
+            if s is not None and len(s) > 20:
+                s_idx = s / float(s.iloc[0]) * 100
+                fig_eq.add_trace(go.Scatter(
+                    x=s_idx.index, y=s_idx,
+                    name=label, line=dict(color=color, width=2),
+                    hovertemplate=f"<b>{label}</b><br>%{{x|%d %b %Y}}<br>Indexed: %{{y:.1f}}<extra></extra>",
+                ))
+        fig_eq.add_hline(y=100, line_dash="dot", line_color="#aaa")
+        fig_eq.update_layout(
+            height=380, hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            yaxis_title="Index (start = 100)", xaxis_title="",
+            margin=dict(l=0, r=0, t=40, b=0),
+        )
+        st.plotly_chart(fig_eq, use_container_width=True)
+
+        st.divider()
+
+        # ── Commodities + FX side by side ─────────────────────────────────────
+        c_l, c_r = st.columns(2)
+        with c_l:
+            st.markdown("#### Commodities — 1Y Indexed")
+            fig_c = go.Figure()
+            for key, (label, color) in _CMDTY_META.items():
+                s = mkt.get(key)
+                if s is not None and len(s) > 20:
+                    s_idx = s / float(s.iloc[0]) * 100
+                    fig_c.add_trace(go.Scatter(
+                        x=s_idx.index, y=s_idx, name=label,
+                        line=dict(color=color, width=2),
+                        hovertemplate=f"<b>{label}</b><br>%{{y:.1f}}<extra></extra>",
+                    ))
+            fig_c.add_hline(y=100, line_dash="dot", line_color="#aaa")
+            fig_c.update_layout(
+                height=300, hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                yaxis_title="Index (start = 100)", margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(fig_c, use_container_width=True)
+
+        with c_r:
+            st.markdown("#### G10 FX vs USD — 1Y Change")
+            fx_meta = [
+                ("eurusd","EUR/USD","#2980b9"), ("usdjpy","USD/JPY","#c0392b"),
+                ("gbpusd","GBP/USD","#27ae60"), ("usdcnh","USD/CNH","#d35400"),
+                ("usdbrl","USD/BRL","#8e44ad"), ("usdzar","USD/ZAR","#f39c12"),
+                ("usdmxn","USD/MXN","#16a085"),
+            ]
+            fx_rows = []
+            for key, label, color in fx_meta:
+                s = mkt.get(key)
+                if s is not None and len(s) >= 252:
+                    last = float(s.iloc[-1])
+                    chg_1y = last / float(s.iloc[-252]) - 1
+                    chg_1m = last / float(s.iloc[-22]) - 1
+                    fx_rows.append((label, last, chg_1m, chg_1y, color))
+            if fx_rows:
+                fig_fx = go.Figure()
+                labels_fx = [r[0] for r in fx_rows]
+                chg_1m_fx = [r[2] * 100 for r in fx_rows]
+                chg_1y_fx = [r[3] * 100 for r in fx_rows]
+                colors_1m = ["#c0392b" if v > 0 else "#27ae60" for v in chg_1m_fx]
+                fig_fx.add_trace(go.Bar(
+                    name="1M %", x=labels_fx, y=chg_1m_fx,
+                    marker_color=colors_1m, opacity=0.85,
+                ))
+                fig_fx.add_trace(go.Scatter(
+                    name="1Y %", x=labels_fx, y=chg_1y_fx,
+                    mode="markers", marker=dict(size=9, color="#2c3e50", symbol="diamond"),
+                ))
+                fig_fx.add_hline(y=0, line_dash="dot", line_color="#aaa")
+                fig_fx.update_layout(
+                    height=300, barmode="group",
+                    yaxis_title="% change", hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(fig_fx, use_container_width=True)
+
+        st.divider()
+
+        # ── US Yield curve + Credit spreads ───────────────────────────────────
+        c3, c4 = st.columns(2)
+        with c3:
+            st.markdown("#### US Treasury Yields — History")
+            if yields is not None and "10Y" in yields.columns and "2Y" in yields.columns:
+                fig_y = go.Figure()
+                fig_y.add_trace(go.Scatter(x=yields.index, y=yields["10Y"],
+                    name="10Y", line=dict(color="#2980b9", width=2)))
+                fig_y.add_trace(go.Scatter(x=yields.index, y=yields["2Y"],
+                    name="2Y", line=dict(color="#c0392b", width=2)))
+                if "3M" in yields.columns:
+                    fig_y.add_trace(go.Scatter(x=yields.index, y=yields["3M"],
+                        name="3M", line=dict(color="#7f8c8d", width=1.5, dash="dot")))
+                fig_y.update_layout(height=280, yaxis_title="%",
+                    hovermode="x unified", margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig_y, use_container_width=True)
+
+        with c4:
+            st.markdown("#### Credit Spreads — HY & IG")
+            if fred is not None:
+                fig_sp = go.Figure()
+                if "hy_spread" in fred:
+                    hy = fred["hy_spread"].dropna()
+                    fig_sp.add_trace(go.Scatter(x=hy.index, y=hy,
+                        name="HY Spread", line=dict(color="#c0392b", width=2)))
+                if "ig_spread" in fred:
+                    ig = fred["ig_spread"].dropna()
+                    fig_sp.add_trace(go.Scatter(x=ig.index, y=ig,
+                        name="IG Spread", line=dict(color="#2980b9", width=2)))
+                fig_sp.update_layout(height=280, yaxis_title="bps",
+                    hovermode="x unified", margin=dict(l=0, r=0, t=30, b=0))
+                st.plotly_chart(fig_sp, use_container_width=True)
+
+        # ── Snapshot cards ────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("#### Live Snapshot")
+        snap_meta = [
+            ("spx","S&P 500",".0f",""),("ndx","NASDAQ",".0f",""),
+            ("dax","DAX",".0f",""),("ftse","FTSE 100",".0f",""),
+            ("n225","Nikkei",".0f",""),("hsi","Hang Seng",".0f",""),
+            ("gold","Gold",".0f"," $/oz"),("brent","Brent",".1f"," $/bbl"),
+            ("copper","Copper",".4f"," $/lb"),("vix","VIX",".1f",""),
+        ]
+        snap_cols = st.columns(5)
+        for i, (key, label, fmt, suffix) in enumerate(snap_meta):
+            s = mkt.get(key)
+            if s is not None and not s.empty:
+                last  = float(s.iloc[-1])
+                chg1d = last / float(s.iloc[-2]) - 1 if len(s) >= 2 else 0
+                color = "#c0392b" if chg1d < -0.005 else "#27ae60" if chg1d > 0.005 else "#2c3e50"
+                snap_cols[i % 5].markdown(
+                    f'<div class="sig-box" style="border-left:5px solid {color};'
+                    f'padding:6px 10px;margin:3px 0;text-align:center;">'
+                    f'<div style="font-size:0.75rem;color:#7f8c8d;">{label}</div>'
+                    f'<div style="font-weight:700;font-size:1rem;color:{color};">'
+                    f'{last:{fmt}}{suffix}</div>'
+                    f'<div style="font-size:0.72rem;color:{color};">{chg1d*100:+.2f}% 1D</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 10 — NEWS FEED
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[9]:
+    st.subheader("📡 Key News — Financial & Macro")
+    st.caption(f"Source: {news_src} · Refreshed every 15 min · Click headline to open article")
+
+    if news is None:
+        st.warning("News feed unavailable — RSS fetch failed.")
+    else:
+        # Group by source
+        from collections import defaultdict
+        by_source: dict[str, list] = defaultdict(list)
+        for item in news:
+            by_source[item["source"]].append(item)
+
+        sources_order = list(by_source.keys())
+        n_cols = min(len(sources_order), 3)
+        src_cols = st.columns(n_cols)
+
+        for ci, source_name in enumerate(sources_order[:n_cols]):
+            with src_cols[ci]:
+                color = news[0]["color"] if news else "#2c3e50"
+                for item in by_source[source_name]:
+                    color = item["color"]
+                    break
+                st.markdown(
+                    f'<div style="border-bottom:3px solid {color};padding-bottom:4px;'
+                    f'margin-bottom:8px;font-weight:700;font-size:0.95rem;">'
+                    f'{source_name}</div>',
+                    unsafe_allow_html=True,
+                )
+                for item in by_source[source_name][:7]:
+                    c = item["color"]
+                    link = item["link"]
+                    title = item["title"]
+                    pub   = item["published"]
+                    summ  = item["summary"]
+                    st.markdown(
+                        f'<div class="sig-box" style="border-left:4px solid {c};'
+                        f'padding:7px 12px;margin:4px 0;">'
+                        f'<a href="{link}" target="_blank" style="text-decoration:none;'
+                        f'color:#2c3e50;font-weight:600;font-size:0.84rem;">{title}</a>'
+                        f'<div style="color:#7f8c8d;font-size:0.72rem;margin-top:3px;">{pub}</div>'
+                        + (f'<div style="color:#555;font-size:0.78rem;margin-top:3px;">{summ}</div>'
+                           if summ else "")
+                        + '</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        # Remaining sources as a flat list below
+        remaining = sources_order[n_cols:]
+        if remaining:
+            st.divider()
+            for source_name in remaining:
+                c_hdr = by_source[source_name][0]["color"]
+                st.markdown(
+                    f'<div style="border-bottom:3px solid {c_hdr};padding-bottom:4px;'
+                    f'margin-bottom:6px;font-weight:700;font-size:0.95rem;margin-top:12px;">'
+                    f'{source_name}</div>',
+                    unsafe_allow_html=True,
+                )
+                r2, r3 = st.columns(2)
+                for idx, item in enumerate(by_source[source_name][:6]):
+                    col = r2 if idx % 2 == 0 else r3
+                    c   = item["color"]
+                    col.markdown(
+                        f'<div class="sig-box" style="border-left:4px solid {c};'
+                        f'padding:7px 12px;margin:4px 0;">'
+                        f'<a href="{item["link"]}" target="_blank" style="text-decoration:none;'
+                        f'color:#2c3e50;font-weight:600;font-size:0.84rem;">{item["title"]}</a>'
+                        f'<div style="color:#7f8c8d;font-size:0.72rem;margin-top:3px;">{item["published"]}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 11 — WEEKLY NOTE
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[10]:
     st.subheader(f"Weekly Macro Briefing — {note['as_of']}")
 
     if not show_narrative:
@@ -1193,7 +1491,7 @@ def _render_note_section(sec: dict) -> None:
     )
 
 
-with tabs[9]:
+with tabs[11]:
     st.subheader(f"Daily Intelligence Note — {daily['as_of']}")
     st.caption("9-section intelligence briefing | Real data only | PLACEHOLDERs labelled")
 
@@ -1222,7 +1520,7 @@ with tabs[9]:
 # TAB 11 — HOURLY NOTE
 # ══════════════════════════════════════════════════════════════════════════════
 
-with tabs[10]:
+with tabs[12]:
     st.subheader(f"Hourly Macro Snapshot — {hourly['as_of']}")
     st.caption("Condensed 4-section real-time snapshot | Refreshes on page reload")
 
