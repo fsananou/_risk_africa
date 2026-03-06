@@ -18,27 +18,26 @@ Or environment variables:
 from __future__ import annotations
 import os
 
-try:
-    import streamlit as st
+def _read_secret(section: str, key: str, env_var: str) -> str | None:
+    """Read a key from st.secrets[section][key], falling back to env var."""
+    # 1. Try Streamlit secrets (bracket access is most reliable)
+    try:
+        import streamlit as st
+        val = st.secrets[section][key]
+        if val:
+            return str(val)
+    except Exception:
+        pass
+    # 2. Fallback: environment variable
+    return os.getenv(env_var) or None
 
-    def get_fred_key() -> str | None:
-        try:
-            return st.secrets.get("api_keys", {}).get("fred") or os.getenv("FRED_API_KEY")
-        except Exception:
-            return os.getenv("FRED_API_KEY")
 
-    def get_eia_key() -> str | None:
-        try:
-            return st.secrets.get("api_keys", {}).get("eia") or os.getenv("EIA_API_KEY")
-        except Exception:
-            return os.getenv("EIA_API_KEY")
+def get_fred_key() -> str | None:
+    return _read_secret("api_keys", "fred", "FRED_API_KEY")
 
-except ImportError:
-    def get_fred_key() -> str | None:
-        return os.getenv("FRED_API_KEY")
 
-    def get_eia_key() -> str | None:
-        return os.getenv("EIA_API_KEY")
+def get_eia_key() -> str | None:
+    return _read_secret("api_keys", "eia", "EIA_API_KEY")
 
 
 # ── FRED Series ────────────────────────────────────────────────────────────────
@@ -61,6 +60,7 @@ FRED_SERIES = {
     "corn":          "PMAIZMTUSDM",
     "rice":          "PRICENPQUSDM",
     "indpro_us":     "INDPRO",
+    "baltic_dry":    "BDIY",
 }
 
 # ── Yahoo Finance Tickers ──────────────────────────────────────────────────────
@@ -78,6 +78,13 @@ TICKERS = {
     "xlf":    "XLF",     "xle":    "XLE",     "xlb":    "XLB",
     "xli":    "XLI",
 }
+
+# ── World Bank CMO (Commodity Markets Outlook) ───────────────────────────────
+WB_CMO_URL = (
+    "https://thedocs.worldbank.org/en/doc/"
+    "55ed8b04df8228fea1607a97b5561f73-0050012025/related/"
+    "CMO-October-2025-Forecasts.xlsx"
+)
 
 # ── World Bank ─────────────────────────────────────────────────────────────────
 WB_BASE = "https://api.worldbank.org/v2"

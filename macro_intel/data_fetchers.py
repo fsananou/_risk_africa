@@ -33,7 +33,7 @@ import yfinance as yf
 from config import (
     AGSI_EU_URL, EIA_BASE, FAO_FPI_URL, FRED_SERIES,
     IMF_BASE, OECD_CLI_URL, TICKERS, WB_AFRICA, WB_BASE,
-    WB_EM_BROAD, WB_INDICATORS, get_eia_key, get_fred_key,
+    WB_CMO_URL, WB_EM_BROAD, WB_INDICATORS, get_eia_key, get_fred_key,
 )
 
 _TIMEOUT = 15  # HTTP timeout in seconds
@@ -214,6 +214,7 @@ def get_fred_macro() -> tuple[dict[str, pd.Series] | None, str]:
         "wheat_fred":    FRED_SERIES["wheat"],
         "corn_fred":     FRED_SERIES["corn"],
         "rice_fred":     FRED_SERIES["rice"],
+        "baltic_dry":    FRED_SERIES["baltic_dry"],
     }
     result = {}
     for name, sid in mapping.items():
@@ -493,6 +494,107 @@ def get_oecd_cli() -> tuple[pd.DataFrame | None, str]:
         return df, "OECD"
     except Exception as e:
         return None, f"OECD CLI — FAILED ({type(e).__name__})"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# World Bank CMO — Commodity Markets Outlook Excel
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _parse_cmo_sheet(raw: pd.DataFrame) -> dict[str, pd.Series]:
+    """Detect layout of a WB CMO sheet and extract named time series."""
+    if raw.shape[0] < 5 or raw.shape[1] < 3:
+        return {}
+
+    # Find first row where col-0 is a 4-digit year (1990–2035)
+    year_start = None
+    for ri in range(min(20, raw.shape[0])):
+        try:
+            yr = int(float(raw.iloc[ri, 0]))
+            if 1990 <= yr <= 2035:
+                year_start = ri
+                break
+        except (ValueError, TypeError):
+            continue
+    if year_start is None or year_start == 0:
+        return {}
+
+    # Header row: scan upward for last non-empty row before year_start
+    header_row = year_start - 1
+    for ri in range(year_start - 1, -1, -1):
+        vals = raw.iloc[ri].fillna("").astype(str)
+        if any(len(v.strip()) > 1 for v in vals.iloc[1:]):
+            header_row = ri
+            break
+
+    headers = raw.iloc[header_row].fillna("").astype(str).tolist()
+    data_block = raw.iloc[year_start:]
+
+    # Build year index
+    years_dt, valid_idx = [], []
+    for ri in range(len(data_block)):
+        try:
+            yr = int(float(data_block.iloc[ri, 0]))
+            if 1990 <= yr <= 2035:
+                years_dt.append(pd.Timestamp(f"{yr}-01-01"))
+                valid_idx.append(ri)
+        except (ValueError, TypeError):
+            continue
+    if len(years_dt) < 3:
+        return {}
+
+    subset = data_block.iloc[valid_idx]
+    result = {}
+    for ci in range(1, min(len(headers), subset.shape[1])):
+        name = " ".join(str(headers[ci]).split()).strip()
+        if not name or name.lower() in ("nan", "none") or len(name) < 2:
+            continue
+        try:
+            vals = pd.to_numeric(subset.iloc[:, ci], errors="coerce")
+            s = pd.Series(vals.values, index=years_dt[:len(vals)]).dropna()
+            if len(s) >= 3:
+                result[name] = s
+        except Exception:
+            continue
+    return result
+
+
+def get_wb_cmo() -> tuple[dict[str, pd.Series] | None, str]:
+    """
+    World Bank Commodity Markets Outlook — annual price data / forecasts.
+    Fetches the Excel file directly. Free, no API key.
+    Returns dict of commodity_name → pd.Series(DatetimeIndex, float).
+    """
+    import io
+    try:
+        resp = requests.get(
+            WB_CMO_URL, timeout=30,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; research/1.0)"},
+        )
+        resp.raise_for_status()
+        xl = pd.ExcelFile(io.BytesIO(resp.content), engine="openpyxl")
+
+        # Prioritise sheets likely to have annual price data
+        prio = ["annual", "price", "forecast", "cmo", "data"]
+        ordered = sorted(
+            xl.sheet_names,
+            key=lambda s: next((i for i, kw in enumerate(prio) if kw in s.lower()), 99),
+        )
+        result = {}
+        for sheet in ordered[:6]:
+            try:
+                raw = xl.parse(sheet, header=None)
+                parsed = _parse_cmo_sheet(raw)
+                result.update(parsed)
+                if len(result) >= 8:
+                    break
+            except Exception:
+                continue
+
+        if result:
+            return result, "World Bank CMO (Oct 2025)"
+        return None, "WB CMO — FAILED (no parseable data)"
+    except Exception as e:
+        return None, f"WB CMO — FAILED ({type(e).__name__})"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

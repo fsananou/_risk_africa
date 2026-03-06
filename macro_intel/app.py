@@ -151,8 +151,10 @@ with st.sidebar:
         default=["NGA","KEN","EGY","GHA","ZAF"], label_visibility="collapsed",
     )
     st.divider()
+    _fk_check = cfg.get_fred_key()
+    _ek_check = cfg.get_eia_key()
+    st.caption(f"FRED: {'✅' if _fk_check else '❌ missing'} · EIA: {'✅' if _ek_check else '❌ missing'}")
     st.caption(f"As of: {datetime.date.today().strftime('%d %b %Y')}")
-    st.caption("Real data: FRED · EIA · AGSI+ · FAO · World Bank · IMF · OECD · Yahoo Finance")
 
 
 # ── Resolve keys once (from secrets.toml → env var) ──────────────────────────
@@ -196,12 +198,8 @@ def load_imf():       return df_mod.get_imf_macro()
 @st.cache_data(ttl=3600,  show_spinner=False)
 def load_oecd():      return df_mod.get_oecd_cli()
 
-# Placeholders (always return None)
 @st.cache_data(ttl=86400, show_spinner=False)
-def load_shipping():  return df_mod.get_shipping_rates()
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def load_embi():      return df_mod.get_embi_spreads()
+def load_wb_cmo():    return df_mod.get_wb_cmo()
 
 @st.cache_data(ttl=3600,  show_spinner=False)
 def load_gpr():       return df_mod.get_gpr_index()
@@ -220,16 +218,15 @@ with st.spinner("Loading real-world data…"):
     ext_debt, wb_d_src = load_wb_debt()
     imf_data, imf_src  = load_imf()
     oecd_cli, oecd_src = load_oecd()
-    _,        ship_src = load_shipping()
-    _,        embi_src = load_embi()
+    cmo_data, cmo_src  = load_wb_cmo()
     gpr_data, gpr_src  = load_gpr()
 
 ALL_SOURCES = {
     "Market": mkt_src, "Yields": yld_src, "FRED": fred_src,
     "EIA Oil": eia_o_src, "EIA Gas": eia_g_src, "AGSI+": agsi_src,
     "FAO": fao_src, "WB Reserves": wb_r_src, "WB FDI": wb_f_src,
-    "WB Debt": wb_d_src, "IMF": imf_src, "OECD": oecd_src,
-    "Shipping": ship_src, "EMBI": embi_src, "GPR": gpr_src,
+    "WB Debt": wb_d_src, "WB CMO": cmo_src, "IMF": imf_src,
+    "OECD": oecd_src, "GPR": gpr_src,
 }
 
 # Compute
@@ -341,9 +338,16 @@ with tabs[0]:
     if show_raw:
         st.divider()
         st.subheader("Raw Indicator Values")
-        st.dataframe(
-            pd.DataFrame([{"Indicator": k, "Value": str(v)} for k, v in sorted(ind.items())]),
-            use_container_width=True, height=400,
+        rows_html = "".join(
+            f'<div style="display:flex;justify-content:space-between;padding:4px 12px;'
+            f'border-bottom:1px solid #eee;font-size:0.82rem;">'
+            f'<span style="color:#555;">{k}</span>'
+            f'<span style="font-weight:600;color:#2c3e50;">{str(v)[:40]}</span></div>'
+            for k, v in sorted(ind.items())
+        )
+        st.markdown(
+            f'<div style="border:1px solid #ddd;max-height:400px;overflow-y:auto;">{rows_html}</div>',
+            unsafe_allow_html=True,
         )
 
 
@@ -396,9 +400,6 @@ with tabs[1]:
                 fig.add_hline(y=0, line_dash="dash", line_color="black")
                 fig.update_layout(title=f"2Y–10Y Spread (bps) — {yld_src}", height=280)
                 st.plotly_chart(fig, use_container_width=True)
-    else:
-        _placeholder_box("Yield Curve", yld_src)
-
     # FRED macro
     st.divider()
     c_c, c_d = st.columns(2)
@@ -408,9 +409,9 @@ with tabs[1]:
         be5  = ind.get("breakeven5y", np.nan)
         be55 = ind.get("breakeven5y5y", np.nan)
         move = ind.get("move_proxy", np.nan)
-        st.metric("Term Premium (ACM/FRED)", f"{tp:.2f}%" if not _nan(tp) else "N/A — no FRED key")
-        st.metric("5Y Breakeven (FRED)",     f"{be5:.2f}%" if not _nan(be5) else "N/A — no FRED key")
-        st.metric("5Y5Y Forward (FRED)",     f"{be55:.2f}%" if not _nan(be55) else "N/A — no FRED key")
+        st.metric("Term Premium (ACM/FRED)", f"{tp:.2f}%"  if not _nan(tp)   else "N/A")
+        st.metric("5Y Breakeven (FRED)",     f"{be5:.2f}%" if not _nan(be5)  else "N/A")
+        st.metric("5Y5Y Forward (FRED)",     f"{be55:.2f}%" if not _nan(be55) else "N/A")
         st.metric("MOVE proxy (FRED yields)",f"{move:.0f}" if not _nan(move) else "N/A")
     with c_d:
         st.markdown("**Regimes**")
@@ -429,10 +430,8 @@ with tabs[1]:
         fig.add_trace(go.Bar(x=nfci.index, y=nfci,
             marker_color=["#c0392b" if v > 0.5 else "#27ae60" for v in nfci]))
         fig.add_hline(y=0, line_dash="dash", line_color="black")
-        fig.update_layout(title=f"Chicago Fed NFCI (>0 = tighter) — FRED", height=240)
+        fig.update_layout(title="Chicago Fed NFCI (>0 = tighter) — FRED", height=240)
         st.plotly_chart(fig, use_container_width=True)
-    elif fred is None:
-        _placeholder_box("NFCI", fred_src)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -458,8 +457,6 @@ with tabs[2]:
             st.plotly_chart(fig, use_container_width=True)
             inv_dev = ind.get("us_oil_inventory_dev", np.nan)
             st.caption(f"Deviation vs 5Y avg: {inv_dev*100:+.1f}%" if not _nan(inv_dev) else "")
-        else:
-            _placeholder_box("US Oil Inventories", eia_o_src)
 
     with c2:
         st.markdown("**EU Gas Storage — AGSI+**")
@@ -475,8 +472,6 @@ with tabs[2]:
             fig.update_layout(title="EU Gas Storage % Full (AGSI+ / GIE)", yaxis_title="%",
                               height=260)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            _placeholder_box("EU Gas Storage", agsi_src)
 
     st.divider()
     c3, c4 = st.columns(2)
@@ -487,8 +482,6 @@ with tabs[2]:
             fig.add_trace(go.Scatter(x=us_gas.index, y=us_gas, name="US Gas Storage (Bcf)"))
             fig.update_layout(title="US Nat Gas Storage (EIA)", yaxis_title="Bcf", height=240)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            _placeholder_box("US Nat Gas Storage", eia_g_src)
 
     with c4:
         st.markdown("**OECD CLI — OECD**")
@@ -500,8 +493,6 @@ with tabs[2]:
             fig.update_layout(title="OECD Composite Leading Indicators (OECD SDMX)",
                               yaxis_title="Index", height=240)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            _placeholder_box("OECD CLI", oecd_src)
 
     # GPR — real if CSV available, else placeholder
     st.divider()
@@ -520,20 +511,6 @@ with tabs[2]:
         )
         st.plotly_chart(fig, use_container_width=True)
         st.caption(f"Source: {gpr_src}")
-    else:
-        _placeholder_box("GPR — Caldara & Iacoviello", gpr_src)
-        st.caption(
-            "To activate: download `gpr_daily.csv` from "
-            "[matteoiacoviello.com/gpr.htm](https://www.matteoiacoviello.com/gpr.htm) "
-            "and place it in `macro_intel/data/`"
-        )
-
-    st.divider()
-    st.markdown("**Placeholders — Real-time API unavailable**")
-    for key, meta in cfg.PLACEHOLDERS.items():
-        if key == "gpr_index":
-            continue   # Already handled above
-        _placeholder_box(meta["name"], meta["reason"] + " | " + meta.get("alt",""))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -553,8 +530,6 @@ with tabs[3]:
                       line_color="#c0392b", annotation_text="Very Strong")
         fig.update_layout(title=f"USD Index (DXY) — {mkt_src}", height=280)
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        _placeholder_box("DXY", mkt_src)
 
     c1, c2 = st.columns(2)
     with c1:
@@ -566,8 +541,6 @@ with tabs[3]:
             fig.update_layout(barmode="group", title=f"FDI Net Inflows (USD bn) — {wb_f_src}",
                               yaxis_title="USD bn", height=280)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            _placeholder_box("FDI Flows", wb_f_src)
 
     with c2:
         st.markdown("**External Debt — World Bank**")
@@ -579,13 +552,24 @@ with tabs[3]:
             fig.update_layout(title=f"External Debt Stocks (USD bn) — {wb_d_src}",
                               height=280)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            _placeholder_box("External Debt", wb_d_src)
 
-    _placeholder_box("Cross-border Banking Flows (BIS)",
-                     "BIS SDMX API requires complex authentication for full LBS data")
-    _placeholder_box("EM Portfolio Flows (IIF)",
-                     "IIF data requires subscription — weekly flows unavailable free")
+    # Baltic Dry Index
+    if fred is not None and "baltic_dry" in fred:
+        bdi = fred["baltic_dry"].dropna()
+        if not bdi.empty:
+            st.divider()
+            st.markdown("**Baltic Dry Index — FRED (BDIY)**")
+            bdi_avg2y = float(bdi.iloc[-min(len(bdi), 520):].mean())
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=bdi.index, y=bdi, name="BDI",
+                                     line=dict(color="#2c3e50")))
+            fig.add_hline(y=bdi_avg2y, line_dash="dot", line_color="#7f8c8d",
+                          annotation_text="2Y avg")
+            fig.update_layout(
+                title="Baltic Dry Index (global shipping demand) — FRED",
+                yaxis_title="Index", height=260,
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -609,7 +593,6 @@ with tabs[4]:
             st.warning(f"⚠️ FX reserve drawdown: **{ind.get('fx_res_worst_country','unknown')}** most exposed (World Bank)")
         else:
             st.success("FX reserves: no acute drawdown detected")
-        _placeholder_box("EMBI Sovereign Spreads", embi_src)
 
     # EM FX table
     st.divider()
@@ -625,10 +608,18 @@ with tabs[4]:
             if s is not None and len(s) >= 22:
                 last = float(s.iloc[-1])
                 chg_1m = last / float(s.iloc[-22]) - 1
-                rows.append({"Pair":label, "Latest":f"{last:.2f}",
-                             "1M Chg":f"{chg_1m*100:+.1f}%"})
+                color = "#c0392b" if chg_1m > 0.01 else "#27ae60" if chg_1m < -0.01 else "#2c3e50"
+                rows.append({"pair": label, "latest": f"{last:.4f}",
+                             "chg": chg_1m, "chg_fmt": f"{chg_1m*100:+.1f}%", "color": color})
         if rows:
-            st.dataframe(pd.DataFrame(rows).set_index("Pair"), use_container_width=True)
+            cells = "".join(
+                f'<div class="sig-box" style="border-left:5px solid {r["color"]};padding:8px 14px;margin:3px 0;">'
+                f'<span style="font-weight:700;font-size:0.9rem;">{r["pair"]}</span>'
+                f'<span style="float:right;font-size:0.9rem;">{r["latest"]}'
+                f'&nbsp;&nbsp;<b style="color:{r["color"]};">{r["chg_fmt"]}</b></span></div>'
+                for r in rows
+            )
+            st.markdown(cells, unsafe_allow_html=True)
     else:
         _placeholder_box("EM FX", mkt_src)
 
@@ -644,19 +635,25 @@ with tabs[4]:
         fig.update_layout(title=f"FX Reserves (World Bank) — {wb_r_src}",
                           yaxis_title="USD", height=300)
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        _placeholder_box("FX Reserves", wb_r_src)
 
     # IMF data
     st.divider()
     st.markdown("**IMF Macro Indicators — IMF DataMapper**")
     if imf_data is not None and len(imf_data) > 0:
         for label, df_imf in imf_data.items():
-            if df_imf is not None and not df_imf.empty:
-                with st.expander(f"**{label.replace('_',' ').title()}** (IMF)"):
-                    st.dataframe(df_imf.tail(5), use_container_width=True)
-    else:
-        _placeholder_box("IMF Macro Data", imf_src)
+            if df_imf is None or df_imf.empty:
+                continue
+            recent = df_imf.tail(3)
+            # Show as a compact horizontal metric strip
+            header = f"**{label.replace('_',' ').title()}** (IMF)"
+            st.markdown(header)
+            metric_cols = st.columns(min(len(recent.columns), 6))
+            for ci, iso in enumerate(recent.columns[:6]):
+                vals = recent[iso].dropna()
+                if not vals.empty:
+                    v = float(vals.iloc[-1])
+                    yr = str(vals.index[-1].year) if hasattr(vals.index[-1], "year") else ""
+                    metric_cols[ci].metric(f"{iso} ({yr})", f"{v:.1f}")
 
     st.info("📌 **Eurobond maturity wall 2025–2027**: Ghana, Kenya, Ethiopia, Egypt each face "
             "significant Eurobond redemptions. Monitor FX reserve cover and IMF program status.")
@@ -676,16 +673,15 @@ with tabs[5]:
         st.metric("VIX Regime",       ind.get("vix_regime","unknown").upper())
         st.metric("VIX Term Structure",ind.get("vix_term_structure","unknown").upper())
         st.metric("MOVE Proxy",       f"{ind.get('move_proxy',np.nan):.0f}" if not _nan(ind.get("move_proxy")) else "N/A")
-        _placeholder_box("ICE MOVE Index", cfg.PLACEHOLDERS["move_index"]["reason"])
 
     with c2:
         st.markdown("**Inflation Expectations (FRED)**")
         be5  = ind.get("breakeven5y",   np.nan)
         be55 = ind.get("breakeven5y5y", np.nan)
         tp   = ind.get("term_premium",  np.nan)
-        st.metric("5Y Breakeven",   f"{be5:.2f}%"  if not _nan(be5)  else "N/A — no FRED key")
-        st.metric("5Y5Y Forward",   f"{be55:.2f}%" if not _nan(be55) else "N/A — no FRED key")
-        st.metric("Term Premium",   f"{tp:.2f}%"   if not _nan(tp)   else "N/A — no FRED key")
+        st.metric("5Y Breakeven",   f"{be5:.2f}%"  if not _nan(be5)  else "N/A")
+        st.metric("5Y5Y Forward",   f"{be55:.2f}%" if not _nan(be55) else "N/A")
+        st.metric("Term Premium",   f"{tp:.2f}%"   if not _nan(tp)   else "N/A")
         st.metric("Inflation Regime",ind.get("inflation_regime","unknown").upper())
 
     with c3:
@@ -770,8 +766,6 @@ with tabs[6]:
             fig.add_trace(go.Scatter(x=natgas_s.index, y=natgas_s, name="Henry Hub (NG=F)"))
             fig.update_layout(title=f"US Nat Gas (Henry Hub) — {mkt_src}", height=240)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            _placeholder_box("EU Electricity Prices", cfg.PLACEHOLDERS["electricity_eu"]["reason"])
 
     # Agriculture charts (real)
     st.divider()
@@ -789,8 +783,6 @@ with tabs[6]:
             fig.update_layout(title=f"FAO Food Price Index — {fao_src}",
                               yaxis_title="Index (2014-16=100)", height=260)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            _placeholder_box("FAO Food Price Index", fao_src)
 
     with c_a2:
         wheat_s = mkt.get("wheat") if mkt is not None else None
@@ -808,15 +800,33 @@ with tabs[6]:
             fig.update_layout(title=f"Wheat & Corn Futures (indexed 100) — {mkt_src}", height=260)
             st.plotly_chart(fig, use_container_width=True)
 
-    _placeholder_box("Fertilizer Prices (Urea, Ammonia, Potash)",
-                     cfg.PLACEHOLDERS["fertilizer_prices"]["reason"])
-
-    # Chemicals
-    st.divider()
-    st.subheader("🧪 Chemicals — Placeholders")
-    _placeholder_box("Fertilizer Prices", cfg.PLACEHOLDERS["fertilizer_prices"]["reason"])
-    _placeholder_box("Petrochemical feedstock (Naphtha, Ethane)",
-                     "No free real-time REST API. LME and ICIS require subscriptions.")
+    # WB CMO — fertilizer / commodity prices
+    if cmo_data is not None:
+        fert_keys = [k for k in cmo_data
+                     if any(x in k.lower() for x in ["urea","dap","potash","phosphate","fertiliz"])]
+        other_keys = [k for k in cmo_data if k not in fert_keys and
+                      not any(x in k.lower() for x in ["crude","oil","gas","wheat","corn","rice","maize"])]
+        if fert_keys:
+            st.divider()
+            st.subheader("🧪 Fertilizer Prices — World Bank CMO")
+            fig = go.Figure()
+            for k in fert_keys[:5]:
+                s = cmo_data[k].dropna()
+                if not s.empty:
+                    fig.add_trace(go.Scatter(x=s.index, y=s, name=k, mode="lines+markers"))
+            fig.update_layout(title=f"Fertilizer Prices (USD/mt) — {cmo_src}",
+                              yaxis_title="USD/mt", height=280)
+            st.plotly_chart(fig, use_container_width=True)
+        if other_keys:
+            st.divider()
+            st.subheader("📊 Other CMO Commodities — World Bank")
+            fig = go.Figure()
+            for k in other_keys[:6]:
+                s = cmo_data[k].dropna()
+                if not s.empty:
+                    fig.add_trace(go.Scatter(x=s.index, y=s, name=k, mode="lines+markers"))
+            fig.update_layout(title=f"World Bank CMO Commodity Prices — {cmo_src}", height=280)
+            st.plotly_chart(fig, use_container_width=True)
 
     # Critical Minerals
     st.divider()
@@ -838,18 +848,6 @@ with tabs[6]:
                                      name="Nickel (NI=F)", line=dict(color="#8e44ad")))
             fig.update_layout(title=f"Nickel Futures (NI=F) — {mkt_src}", height=240)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            _placeholder_box("Nickel", mkt_src)
-    _placeholder_box("Lithium Prices",  cfg.PLACEHOLDERS["lithium_prices"]["reason"])
-    _placeholder_box("Cobalt Prices",   cfg.PLACEHOLDERS["cobalt_prices"]["reason"])
-    _placeholder_box("LME Inventories", cfg.PLACEHOLDERS["lme_inventories"]["reason"])
-
-    # Technology
-    st.divider()
-    st.subheader("💾 Technology — Placeholders")
-    _placeholder_box("Semiconductor Sales (WSTS)", cfg.PLACEHOLDERS["semiconductor"]["reason"])
-    st.caption("No real-time free API exists for semiconductor sales data. "
-               "Sector ETF (XLK) available on yfinance as rough proxy only.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
