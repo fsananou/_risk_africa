@@ -47,26 +47,38 @@ st.set_page_config(
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  .insight-alert   {background:#fdf3f2;border-left:4px solid #c0392b;padding:10px 14px;border-radius:6px;margin:6px 0;}
-  .insight-warning {background:#fef9f0;border-left:4px solid #d35400;padding:10px 14px;border-radius:6px;margin:6px 0;}
-  .insight-info    {background:#f0f7fd;border-left:4px solid #2980b9;padding:10px 14px;border-radius:6px;margin:6px 0;}
-  .inference-high  {background:#fdf3f2;border-left:4px solid #c0392b;padding:8px 12px;border-radius:4px;margin:4px 0;}
-  .inference-medium{background:#fef9f0;border-left:4px solid #d35400;padding:8px 12px;border-radius:4px;margin:4px 0;}
-  .inference-low   {background:#f4f4f4;border-left:4px solid #7f8c8d;padding:8px 12px;border-radius:4px;margin:4px 0;}
-  .source-badge    {display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.72rem;font-weight:600;margin:2px;}
-  .source-live     {background:#d5f5e3;color:#1a5e2a;}
-  .source-failed   {background:#fde8e8;color:#922b21;}
-  .source-ph       {background:#f3e5f5;color:#5b2c6f;}
-  .placeholder-box {background:#f8f0ff;border:1px dashed #8e44ad;border-radius:6px;padding:10px 14px;color:#5b2c6f;font-size:0.88rem;}
-  .regime-crisis  {background:#fdf3f2;color:#c0392b;padding:8px 14px;border-radius:6px;font-weight:700;}
-  .regime-stressed{background:#fef9f0;color:#d35400;padding:8px 14px;border-radius:6px;font-weight:700;}
-  .regime-cautious{background:#fefdf0;color:#b7950b;padding:8px 14px;border-radius:6px;font-weight:700;}
-  .regime-benign  {background:#eafaf1;color:#1a5e2a;padding:8px 14px;border-radius:6px;font-weight:700;}
-  .sector-crisis  {background:#fdf3f2;border-left:4px solid #c0392b;padding:8px;border-radius:4px;}
-  .sector-stress  {background:#fef9f0;border-left:4px solid #d35400;padding:8px;border-radius:4px;}
-  .sector-normal  {background:#eafaf1;border-left:4px solid #27ae60;padding:8px;border-radius:4px;}
-  .sector-nodata  {background:#f4f4f4;border-left:4px solid #7f8c8d;padding:8px;border-radius:4px;}
-  .prop-chain     {background:#fef9f0;border:1px solid #d35400;border-radius:6px;padding:10px;margin:4px 0;}
+  /* ── Signal boxes: sharp rectangle, title + body visible directly ── */
+  .sig-box        {border:1px solid;padding:12px 16px;margin:6px 0;border-radius:0;}
+  .sig-alert      {background:#fdf3f2;border-color:#c0392b;border-left:5px solid #c0392b;}
+  .sig-warning    {background:#fef9f0;border-color:#d35400;border-left:5px solid #d35400;}
+  .sig-info       {background:#f0f7fd;border-color:#2980b9;border-left:5px solid #2980b9;}
+  .sig-good       {background:#eafaf1;border-color:#27ae60;border-left:5px solid #27ae60;}
+  .sig-title      {font-weight:700;font-size:0.92rem;margin-bottom:4px;}
+  .sig-body       {font-size:0.86rem;color:#2c3e50;margin-bottom:4px;line-height:1.5;}
+  .sig-watch      {font-size:0.78rem;color:#7f8c8d;margin-top:4px;}
+  /* ── Inference boxes ── */
+  .inf-high   {background:#fdf3f2;border:1px solid #c0392b;border-left:5px solid #c0392b;padding:10px 14px;margin:5px 0;border-radius:0;}
+  .inf-medium {background:#fef9f0;border:1px solid #d35400;border-left:5px solid #d35400;padding:10px 14px;margin:5px 0;border-radius:0;}
+  .inf-low    {background:#f4f4f4;border:1px solid #95a5a6;border-left:5px solid #95a5a6;padding:10px 14px;margin:5px 0;border-radius:0;}
+  /* ── Badges ── */
+  .source-badge {display:inline-block;padding:2px 8px;border-radius:0;font-size:0.72rem;font-weight:600;margin:2px;}
+  .source-live  {background:#d5f5e3;color:#1a5e2a;}
+  .source-failed{background:#fde8e8;color:#922b21;}
+  .source-ph    {background:#f3e5f5;color:#5b2c6f;}
+  /* ── Placeholder box ── */
+  .placeholder-box{background:#f8f0ff;border:1px dashed #8e44ad;border-radius:0;padding:10px 14px;color:#5b2c6f;font-size:0.88rem;}
+  /* ── Regime banner ── */
+  .regime-crisis  {background:#fdf3f2;color:#c0392b;padding:8px 14px;border-radius:0;font-weight:700;border-left:5px solid #c0392b;}
+  .regime-stressed{background:#fef9f0;color:#d35400;padding:8px 14px;border-radius:0;font-weight:700;border-left:5px solid #d35400;}
+  .regime-cautious{background:#fefdf0;color:#b7950b;padding:8px 14px;border-radius:0;font-weight:700;border-left:5px solid #b7950b;}
+  .regime-benign  {background:#eafaf1;color:#1a5e2a;padding:8px 14px;border-radius:0;font-weight:700;border-left:5px solid #27ae60;}
+  /* ── Sector cards ── */
+  .sector-crisis {background:#fdf3f2;border-left:5px solid #c0392b;padding:10px 14px;border-radius:0;margin:4px 0;}
+  .sector-stress {background:#fef9f0;border-left:5px solid #d35400;padding:10px 14px;border-radius:0;margin:4px 0;}
+  .sector-normal {background:#eafaf1;border-left:5px solid #27ae60;padding:10px 14px;border-radius:0;margin:4px 0;}
+  .sector-nodata {background:#f4f4f4;border-left:5px solid #95a5a6;padding:10px 14px;border-radius:0;margin:4px 0;}
+  /* ── Propagation chain ── */
+  .prop-chain    {background:#fef9f0;border:1px solid #d35400;border-radius:0;padding:10px;margin:4px 0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -312,17 +324,17 @@ with tabs[0]:
         st.info("No rules fired — check data availability.")
     else:
         for r in rules:
-            lvl = r["level"]
-            icon = cfg.LEVEL_ICON.get(lvl,"")
+            lvl  = r["level"]
+            icon = cfg.LEVEL_ICON.get(lvl, "")
+            watch_str = "  ·  ".join(r.get("watch", []))
             st.markdown(
-                f'<div class="insight-{lvl}">'
-                f'<b>{icon} [{lvl.upper()}] {r["category"]}</b>: {r["headline"]}'
-                f'</div>',
+                f'<div class="sig-box sig-{lvl}">'
+                f'<div class="sig-title">{icon} [{lvl.upper()}] {r["category"]} — {r["headline"]}</div>'
+                f'<div class="sig-body">{r["detail"]}</div>'
+                + (f'<div class="sig-watch">Watch: {watch_str}</div>' if watch_str else "")
+                + "</div>",
                 unsafe_allow_html=True,
             )
-            with st.expander("Detail & watch items"):
-                st.write(r["detail"])
-                st.markdown("**Watch:** " + " · ".join(r.get("watch",[])))
 
     st.divider()
     c1, c2 = st.columns(2)
@@ -722,20 +734,16 @@ with tabs[5]:
                 if not group: continue
                 st.markdown(f"#### {conf_label}")
                 for inf in group:
-                    srcs = ", ".join(inf.get("data_sources",[]))
+                    srcs = ", ".join(inf.get("data_sources", []))
                     st.markdown(
-                        f'<div class="inference-{conf_key}">'
-                        f'{inf.get("icon","📌")} <b>{inf.get("category","")}</b> · '
-                        f'<i>{inf.get("horizon","")}</i><br>'
-                        f'<b>{inf.get("statement","")}</b><br>'
-                        f'<small>Trigger: {inf.get("trigger","")} | '
-                        f'Context: {inf.get("context","")}</small><br>'
-                        f'<small style="color:#2980b9">Sources: {srcs}</small>'
+                        f'<div class="inf-{conf_key}">'
+                        f'<div class="sig-title">{inf.get("icon","📌")} {inf.get("category","")} · <i>{inf.get("horizon","")}</i></div>'
+                        f'<div class="sig-body"><b>{inf.get("statement","")}</b></div>'
+                        f'<div class="sig-body">→ {inf.get("implication","")}</div>'
+                        f'<div class="sig-watch">Trigger: {inf.get("trigger","")} | Context: {inf.get("context","")} | Sources: {srcs}</div>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
-                    with st.expander("Implication"):
-                        st.write(inf.get("implication",""))
                 st.divider()
 
 
@@ -866,21 +874,19 @@ with tabs[7]:
         st.success("No cross-sector propagation chains triggered. Sector conditions broadly stable.")
     else:
         for prop in propagations:
-            strength = prop.get("strength","")
-            icon_str = prop.get("icon","🔗")
+            strength = prop.get("strength", "")
+            icon_str = prop.get("icon", "🔗")
+            srcs     = ", ".join(prop.get("data_sources", []))
             st.markdown(
                 f'<div class="prop-chain">'
-                f'{icon_str} <b>{prop.get("from_sector","")} → {prop.get("to_sector","")}</b>'
-                f' <span style="color:#7f8c8d;font-size:0.85rem">({strength} linkage)</span><br>'
-                f'<b>{prop.get("headline","")}</b><br>'
-                f'<small>{prop.get("mechanism","")}</small><br>'
-                f'<small><i>Signal: {prop.get("signal","")}</i></small><br>'
-                f'<small style="color:#2980b9">Sources: {", ".join(prop.get("data_sources",[]))}</small>'
+                f'<div class="sig-title">{icon_str} {prop.get("from_sector","")} → {prop.get("to_sector","")} <span style="font-weight:400;color:#7f8c8d;font-size:0.84rem">({strength} linkage)</span></div>'
+                f'<div class="sig-body"><b>{prop.get("headline","")}</b></div>'
+                f'<div class="sig-body">{prop.get("mechanism","")}</div>'
+                f'<div class="sig-body">→ {prop.get("implication","")}</div>'
+                f'<div class="sig-watch">Signal: {prop.get("signal","")} | Sources: {srcs}</div>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
-            with st.expander("Implication"):
-                st.write(prop.get("implication",""))
 
     # Sector connectivity diagram (text-based)
     st.divider()
@@ -942,26 +948,35 @@ with tabs[8]:  # noqa: E741 — index 8 = tab 9
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_note_section(sec: dict) -> None:
-    """Render a note_generator section inside Streamlit."""
-    level_css = {
-        "alert":   ("insight-alert",   "🔴"),
-        "warning": ("insight-warning",  "🟠"),
-        "good":    ("insight-info",     "🟢"),
-        "info":    ("insight-info",     "🔵"),
-    }
-    css, icon = level_css.get(sec.get("level", "info"), ("insight-info", "⚪"))
-    with st.expander(f"{icon} **{sec['title']}**", expanded=True):
-        for row in sec.get("rows", []):
-            if not row.strip():
-                st.write("")
-            elif row.startswith("⚫") or "PLACEHOLDER" in row.upper():
-                st.markdown(
-                    f'<div class="placeholder-box" style="margin:2px 0;font-size:0.82rem;">{row}</div>',
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(f'<div class="{css}" style="padding:4px 10px;margin:2px 0;">{row}</div>',
-                            unsafe_allow_html=True)
+    """Render a note_generator section as a flat rectangle — no click needed."""
+    level_key = sec.get("level", "info")
+    icons = {"alert": "🔴", "warning": "🟠", "good": "🟢", "info": "🔵"}
+    icon  = icons.get(level_key, "⚪")
+    css   = f"sig-{level_key}" if level_key in ("alert","warning","good") else "sig-info"
+
+    body_rows = []
+    ph_rows   = []
+    for row in sec.get("rows", []):
+        if row.startswith("⚫") or "PLACEHOLDER" in row.upper():
+            ph_rows.append(row)
+        else:
+            body_rows.append(row)
+
+    rows_html = "".join(
+        f'<div class="sig-body">{r}</div>' if r.strip() else "<br>"
+        for r in body_rows
+    )
+    ph_html = "".join(
+        f'<div class="placeholder-box" style="margin:3px 0;font-size:0.80rem;">{r}</div>'
+        for r in ph_rows
+    )
+    st.markdown(
+        f'<div class="sig-box {css}">'
+        f'<div class="sig-title">{icon} {sec["title"]}</div>'
+        f'{rows_html}{ph_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 with tabs[9]:
