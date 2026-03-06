@@ -1087,23 +1087,33 @@ with tabs[7]:
                 unsafe_allow_html=True,
             )
 
-    # Sector connectivity diagram (text-based)
+    # Sector connectivity diagram
     st.divider()
     st.subheader("Known Sector Linkages")
-    st.markdown("""
-| From Sector | Transmission Channel | To Sector | Data Available? |
-|---|---|---|---|
-| Energy (Gas) | Haber-Bosch feedstock | Chemicals / Fertilizers | ✅ AGSI+ (gas) |
-| Chemicals | Fertilizer supply crunch | Agriculture (yields) | ✅ AGSI+ + FAO |
-| Agriculture | Food CPI in EM (40-60% basket) | EM/Africa Stress | ✅ FAO + yfinance |
-| Energy (Oil) | Transport/diesel cost | Industrials, Agriculture | ✅ yfinance |
-| Critical Minerals (Cu) | EV/grid capex | Electrification timeline | ✅ yfinance |
-| Macro (USD) | Debt service cost | EM/Africa | ✅ yfinance + WB |
-| Industrials (IP) | Base metal demand | Critical Minerals | ✅ FRED |
-| Shipping rates | Supply chain costs | Industrials, Chemicals | ⚫ PLACEHOLDER |
-| Fertilizer prices | Crop input costs | Agriculture | ⚫ PLACEHOLDER |
-| LME inventories | Metal supply signal | Critical Minerals | ⚫ PLACEHOLDER |
-    """)
+    _linkages = [
+        ("⚡ Energy (Gas)",        "Haber-Bosch feedstock",       "🧪 Chemicals / Fertilizers", True,  "AGSI+"),
+        ("🧪 Chemicals",           "Fertilizer supply crunch",    "🌾 Agriculture",              True,  "AGSI+ + FAO"),
+        ("🌾 Agriculture",         "Food CPI (40–60% EM basket)", "🌍 EM/Africa Stress",         True,  "FAO + Yahoo"),
+        ("⚡ Energy (Oil)",        "Transport & diesel cost",     "🏭 Industrials, 🌾 Agri",     True,  "Yahoo Finance"),
+        ("⛏️ Critical Minerals", "EV/grid capex signal",        "🏭 Industrials",              True,  "Yahoo Finance"),
+        ("💱 Macro (USD)",         "Debt service cost",           "🌍 EM/Africa",                True,  "Yahoo + WB"),
+        ("🏭 Industrials (IP)",    "Base metal demand",           "⛏️ Critical Minerals",       True,  "FRED"),
+        ("🚢 Shipping rates",      "Supply chain cost push",      "🏭 Industrials, 🧪 Chemicals",False, "PLACEHOLDER"),
+        ("🌿 Fertilizer prices",   "Crop input cost",             "🌾 Agriculture",              False, "PLACEHOLDER"),
+        ("🔩 LME inventories",     "Metal supply signal",         "⛏️ Critical Minerals",       False, "PLACEHOLDER"),
+    ]
+    rows_html = "".join(
+        f'<div class="sig-box" style="border-left:5px solid {"#27ae60" if live else "#95a5a6"};'
+        f'padding:7px 14px;margin:3px 0;display:flex;align-items:center;gap:0;">'
+        f'<span style="min-width:180px;font-weight:600;font-size:0.84rem;">{frm}</span>'
+        f'<span style="min-width:220px;font-size:0.82rem;color:#555;">→ {channel}</span>'
+        f'<span style="min-width:200px;font-size:0.84rem;font-weight:600;">{to}</span>'
+        f'<span style="margin-left:auto;font-size:0.78rem;color:{"#27ae60" if live else "#95a5a6"};">'
+        f'{"✅" if live else "⚫"} {src}</span>'
+        f'</div>'
+        for frm, channel, to, live, src in _linkages
+    )
+    st.markdown(rows_html, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
