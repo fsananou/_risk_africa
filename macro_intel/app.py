@@ -1340,6 +1340,39 @@ with tabs[8]:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 10 — NEWS FEED
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _news_card(item: dict, show_summary: bool = True) -> str:
+    c = item["color"]
+    return (
+        f'<div class="sig-box" style="border-left:4px solid {c};padding:7px 12px;margin:4px 0;">'
+        f'<a href="{item["link"]}" target="_blank" style="text-decoration:none;'
+        f'color:#2c3e50;font-weight:600;font-size:0.84rem;">{item["title"]}</a>'
+        f'<div style="display:flex;align-items:center;gap:6px;margin-top:3px;">'
+        f'<span style="font-size:0.70rem;font-weight:600;color:{c};">{item["source"]}</span>'
+        f'<span style="color:#bbb;font-size:0.68rem;">·</span>'
+        f'<span style="color:#7f8c8d;font-size:0.70rem;">{item["published"]}</span>'
+        f'</div>'
+        + (f'<div style="color:#555;font-size:0.78rem;margin-top:3px;line-height:1.4;">'
+           f'{item["summary"]}</div>' if show_summary and item.get("summary") else "")
+        + '</div>'
+    )
+
+
+def _section_header(title: str, accent: str) -> str:
+    return (
+        f'<div style="border-left:5px solid {accent};padding:6px 12px;'
+        f'margin:14px 0 8px 0;background:#fafafa;">'
+        f'<span style="font-weight:700;font-size:0.95rem;color:#2c3e50;">{title}</span>'
+        f'</div>'
+    )
+
+
+_CAT_ACCENT = {
+    "Global Markets":   "#2980b9",
+    "Emerging Markets": "#e67e22",
+    "Africa":           "#27ae60",
+}
+
 with tabs[9]:
     st.subheader("📡 Key News — Financial & Macro")
     st.caption(f"Source: {news_src} · Refreshed every 15 min · Click headline to open article")
@@ -1347,71 +1380,43 @@ with tabs[9]:
     if news is None:
         st.warning("News feed unavailable — RSS fetch failed.")
     else:
-        # Group by source
-        from collections import defaultdict
-        by_source: dict[str, list] = defaultdict(list)
-        for item in news:
-            by_source[item["source"]].append(item)
+        for category, items in news.items():
+            accent = _CAT_ACCENT.get(category, "#2c3e50")
+            st.markdown(_section_header(category, accent), unsafe_allow_html=True)
 
-        sources_order = list(by_source.keys())
-        n_cols = min(len(sources_order), 3)
-        src_cols = st.columns(n_cols)
+            # Group items by source within category
+            from collections import defaultdict as _dd
+            by_src: dict = _dd(list)
+            for item in items:
+                by_src[item["source"]].append(item)
 
-        for ci, source_name in enumerate(sources_order[:n_cols]):
-            with src_cols[ci]:
-                color = news[0]["color"] if news else "#2c3e50"
-                for item in by_source[source_name]:
-                    color = item["color"]
-                    break
-                st.markdown(
-                    f'<div style="border-bottom:3px solid {color};padding-bottom:4px;'
-                    f'margin-bottom:8px;font-weight:700;font-size:0.95rem;">'
-                    f'{source_name}</div>',
-                    unsafe_allow_html=True,
-                )
-                for item in by_source[source_name][:7]:
-                    c = item["color"]
-                    link = item["link"]
-                    title = item["title"]
-                    pub   = item["published"]
-                    summ  = item["summary"]
+            sources = list(by_src.keys())
+            n = min(len(sources), 3)
+            cols = st.columns(n) if n > 1 else [st.container()]
+
+            for ci, src_name in enumerate(sources[:n]):
+                src_color = by_src[src_name][0]["color"]
+                with cols[ci % n]:
                     st.markdown(
-                        f'<div class="sig-box" style="border-left:4px solid {c};'
-                        f'padding:7px 12px;margin:4px 0;">'
-                        f'<a href="{link}" target="_blank" style="text-decoration:none;'
-                        f'color:#2c3e50;font-weight:600;font-size:0.84rem;">{title}</a>'
-                        f'<div style="color:#7f8c8d;font-size:0.72rem;margin-top:3px;">{pub}</div>'
-                        + (f'<div style="color:#555;font-size:0.78rem;margin-top:3px;">{summ}</div>'
-                           if summ else "")
-                        + '</div>',
+                        f'<div style="font-weight:700;font-size:0.82rem;color:{src_color};'
+                        f'border-bottom:2px solid {src_color};padding-bottom:3px;margin-bottom:5px;">'
+                        f'{src_name}</div>',
                         unsafe_allow_html=True,
+                    )
+                    html = "".join(_news_card(it, show_summary=True)
+                                   for it in by_src[src_name][:6])
+                    st.markdown(html, unsafe_allow_html=True)
+
+            # Remaining sources (beyond 3 columns) in a 2-col grid
+            if len(sources) > n:
+                extra_items = [it for src in sources[n:] for it in by_src[src][:5]]
+                c_l, c_r = st.columns(2)
+                for idx, it in enumerate(extra_items):
+                    (c_l if idx % 2 == 0 else c_r).markdown(
+                        _news_card(it, show_summary=False), unsafe_allow_html=True
                     )
 
-        # Remaining sources as a flat list below
-        remaining = sources_order[n_cols:]
-        if remaining:
             st.divider()
-            for source_name in remaining:
-                c_hdr = by_source[source_name][0]["color"]
-                st.markdown(
-                    f'<div style="border-bottom:3px solid {c_hdr};padding-bottom:4px;'
-                    f'margin-bottom:6px;font-weight:700;font-size:0.95rem;margin-top:12px;">'
-                    f'{source_name}</div>',
-                    unsafe_allow_html=True,
-                )
-                r2, r3 = st.columns(2)
-                for idx, item in enumerate(by_source[source_name][:6]):
-                    col = r2 if idx % 2 == 0 else r3
-                    c   = item["color"]
-                    col.markdown(
-                        f'<div class="sig-box" style="border-left:4px solid {c};'
-                        f'padding:7px 12px;margin:4px 0;">'
-                        f'<a href="{item["link"]}" target="_blank" style="text-decoration:none;'
-                        f'color:#2c3e50;font-weight:600;font-size:0.84rem;">{item["title"]}</a>'
-                        f'<div style="color:#7f8c8d;font-size:0.72rem;margin-top:3px;">{item["published"]}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
