@@ -923,10 +923,15 @@ with tabs[8]:  # noqa: E741 — index 8 = tab 9
         st.divider()
 
         for sec in note["sections"]:
-            with st.expander(f"**{sec['title']}**", expanded=True):
-                st.markdown(sec["body"])
-                for b in sec["bullets"]:
-                    st.markdown(f"- {b}")
+            bullets_html = "".join(f'<div class="sig-body">• {b}</div>' for b in sec["bullets"])
+            st.markdown(
+                f'<div class="sig-box sig-info">'
+                f'<div class="sig-title">{sec["title"]}</div>'
+                f'<div class="sig-body" style="color:#555;margin-bottom:6px;">{sec["body"]}</div>'
+                f'{bullets_html}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
         st.divider()
         if note.get("data_sources"):
