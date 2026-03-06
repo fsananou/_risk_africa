@@ -600,35 +600,56 @@ def get_gpr_index() -> tuple[pd.Series | None, str]:
             except Exception:
                 pass
 
-    # ── 2. Try remote public CSV (Harvard Dataverse mirror) ───────────────────
-    remote_urls = [
-        # Direct download from matteoiacoviello.com (may not allow direct HTTP fetch)
-        "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls",
-        # Alternative: try fetching CSV from known public mirror on GitHub
-        "https://raw.githubusercontent.com/pjpmarques/World-Modeling-Datasets/master/GPR/gpr_daily.csv",
-    ]
-    for url in remote_urls:
-        try:
-            df = pd.read_csv(url, on_bad_lines="skip")
-            df.columns = [c.strip().lower() for c in df.columns]
-            date_col = next((c for c in df.columns if "date" in c), None)
-            val_col  = next((c for c in df.columns
-                             if "gprd" in c or "gpr" in c), None)
-            if date_col and val_col:
-                df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-                df[val_col]  = pd.to_numeric(df[val_col], errors="coerce")
-                s = df.dropna(subset=[date_col, val_col]).set_index(date_col)[val_col].sort_index()
-                if len(s) > 10:
-                    return s, "Caldara & Iacoviello (GPR) — remote CSV"
-        except Exception:
-            pass
+    # ── 2. Live fetch from matteoiacoviello.com (XLS) then GitHub CSV mirror ──
+    #
+    # Primary: official XLS (old Excel format — requires xlrd)
+    #   https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls
+    # Fallback: GitHub CSV mirror
+    _GPR_XLS = "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls"
+    _GPR_CSV = "https://raw.githubusercontent.com/pjpmarques/World-Modeling-Datasets/master/GPR/gpr_daily.csv"
+
+    def _parse_gpr_df(df: pd.DataFrame, source_label: str):
+        df.columns = [c.strip().lower() for c in df.columns]
+        date_col = next((c for c in df.columns if "date" in c), None)
+        val_col  = next((c for c in df.columns if "gprd_all" in c or "gprd" in c or "gpr" in c), None)
+        if date_col and val_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+            df[val_col]  = pd.to_numeric(df[val_col], errors="coerce")
+            s = df.dropna(subset=[date_col, val_col]).set_index(date_col)[val_col].sort_index()
+            if len(s) > 10:
+                return s, source_label
+        return None, None
+
+    # Try XLS (official source — xlrd engine required for .xls)
+    try:
+        import io
+        resp = requests.get(_GPR_XLS, timeout=_TIMEOUT + 10)
+        resp.raise_for_status()
+        df = pd.read_excel(io.BytesIO(resp.content), engine="xlrd")
+        s, lbl = _parse_gpr_df(df, "Caldara & Iacoviello (GPR) — matteoiacoviello.com")
+        if s is not None:
+            return s, lbl
+    except Exception:
+        pass
+
+    # Try CSV mirror
+    try:
+        resp = requests.get(_GPR_CSV, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        import io
+        df = pd.read_csv(io.StringIO(resp.text), on_bad_lines="skip")
+        s, lbl = _parse_gpr_df(df, "Caldara & Iacoviello (GPR) — GitHub mirror")
+        if s is not None:
+            return s, lbl
+    except Exception:
+        pass
 
     # ── 3. Fallback: PLACEHOLDER ───────────────────────────────────────────────
     return (
         None,
         "PLACEHOLDER — Caldara & Iacoviello GPR: "
-        "download gpr_daily.csv from matteoiacoviello.com/gpr.htm "
-        "and place in macro_intel/data/ to activate"
+        "install xlrd (pip install xlrd) — data fetched from "
+        "matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls"
     )
 
 
