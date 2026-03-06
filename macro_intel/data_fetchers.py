@@ -32,7 +32,8 @@ import yfinance as yf
 
 from config import (
     AGSI_EU_URL, EIA_BASE, FAO_FPI_URL, FRED_SERIES,
-    IMF_BASE, IMF_INDICATORS, OECD_CLI_URL, TICKERS, WB_AFRICA, WB_BASE,
+    IMF_BASE, IMF_INDICATORS, IMF_SDMX_BASE, OECD_CLI_URL,
+    TICKERS, WB_AFRICA, WB_BASE,
     WB_CMO_URL, WB_EM_BROAD, WB_INDICATORS, get_eia_key, get_fred_key,
 )
 
@@ -92,7 +93,109 @@ def _worldbank(indicator: str, countries: list[str], years: int = 15) -> pd.Data
         return None
 
 
-def _imf(indicator: str, countries: list[str]) -> pd.DataFrame | None:
+def _imf_sdmx(
+    indicators: list[str],
+    countries: list[str],
+    start: int = 2018,
+    end: int = 2030,
+) -> dict[str, pd.DataFrame] | None:
+    """
+    Fetch multiple WEO indicators × countries in ONE SDMX 3.0 call.
+    Returns {indicator_id: DataFrame(index=year int, columns=ISO3)}.
+    Key format: COUNTRY.INDICATOR.FREQUENCY  (e.g. NGA+KEN.NGDP_RPCH.A)
+    """
+    country_key   = "+".join(countries)
+    indicator_key = "+".join(indicators)
+    url = (
+        f"{IMF_SDMX_BASE}/data/dataflow/IMF.RES/WEO/9.0.0"
+        f"/{country_key}.{indicator_key}.A"
+        f"?format=jsondata"
+    )
+    try:
+        r = requests.get(url, timeout=_TIMEOUT + 20,
+                         headers={"Accept": "application/json"})
+        r.raise_for_status()
+        payload = r.json()
+
+        structure = payload["data"]["structures"][0]   # list, not dict
+        datasets  = payload["data"]["dataSets"]
+        if not datasets:
+            return None
+
+        # ── Decode dimension metadata ─────────────────────────────────────────
+        series_dims = structure["dimensions"]["series"]
+        obs_dims    = structure["dimensions"]["observation"]
+
+        dim_order = [d["id"] for d in series_dims]
+        # Build value-list per dimension (time uses "value" key, series use "id")
+        dim_vals = {
+            d["id"]: [v.get("id", v.get("value", "")) for v in d["values"]]
+            for d in series_dims
+        }
+        # Time dim values use "value" key
+        time_vals = [
+            v.get("value", v.get("id", ""))
+            for v in obs_dims[0]["values"]
+        ]
+
+        # Dimension names in WEO: COUNTRY, INDICATOR, FREQUENCY
+        area_pos = next((i for i, d in enumerate(dim_order)
+                         if d in ("COUNTRY", "REF_AREA") or "AREA" in d), None)
+        ind_pos  = next((i for i, d in enumerate(dim_order) if "INDICATOR" in d), None)
+        if area_pos is None or ind_pos is None:
+            return None
+
+        area_dim = dim_order[area_pos]
+        ind_dim  = dim_order[ind_pos]
+
+        # ── Parse series ──────────────────────────────────────────────────────
+        raw: dict[str, dict[str, dict[str, float]]] = {ind: {} for ind in indicators}
+
+        for key_str, series_obj in datasets[0].get("series", {}).items():
+            parts      = key_str.split(":")
+            country_id = dim_vals[area_dim][int(parts[area_pos])]
+            ind_id     = dim_vals[ind_dim][int(parts[ind_pos])]
+            if ind_id not in raw:
+                continue
+            if country_id not in raw[ind_id]:
+                raw[ind_id][country_id] = {}
+            for t_str, obs in series_obj.get("observations", {}).items():
+                val = obs[0] if obs else None
+                if val is not None:
+                    year = time_vals[int(t_str)]
+                    try:
+                        yr_int = int(year)
+                    except (ValueError, TypeError):
+                        continue
+                    if start <= yr_int <= end:
+                        raw[ind_id][country_id][year] = float(val)
+
+        # ── Build DataFrames ──────────────────────────────────────────────────
+        result: dict[str, pd.DataFrame] = {}
+        for ind_id, country_data in raw.items():
+            if not country_data:
+                continue
+            records = [
+                {"country": c, "year": int(yr), "value": v}
+                for c, yv in country_data.items()
+                for yr, v in yv.items()
+            ]
+            if not records:
+                continue
+            df = pd.DataFrame(records).pivot(
+                index="year", columns="country", values="value"
+            ).sort_index()
+            df.index = pd.to_datetime(df.index.astype(str) + "-01-01")
+            result[ind_id] = df
+
+        return result if result else None
+
+    except Exception:
+        return None
+
+
+def _imf_datamapper(indicator: str, countries: list[str]) -> pd.DataFrame | None:
+    """Fallback: old DataMapper API for a single indicator."""
     try:
         url = f"{IMF_BASE}/{indicator}/{'/'.join(countries)}"
         r = requests.get(url, timeout=_TIMEOUT)
@@ -287,23 +390,42 @@ def get_worldbank_debt_service() -> tuple[pd.DataFrame | None, str]:
 # IMF
 # ══════════════════════════════════════════════════════════════════════════════
 
+_IMF_AFRICA_ISO3 = [
+    # Sub-Saharan Africa
+    "AGO","BEN","BWA","BFA","BDI","CMR","CPV","CAF","TCD","COM",
+    "COG","COD","CIV","DJI","GNQ","ERI","SWZ","ETH","GAB","GMB",
+    "GHA","GIN","GNB","KEN","LSO","LBR","MDG","MWI","MLI","MRT",
+    "MUS","MOZ","NAM","NER","NGA","RWA","STP","SEN","SLE","SOM",
+    "ZAF","SSD","SDN","TZA","TGO","UGA","ZMB","ZWE",
+    # North Africa
+    "DZA","EGY","MAR","TUN","LBY",
+]
+
+
 def get_imf_macro() -> tuple[dict[str, pd.DataFrame] | None, str]:
-    """IMF DataMapper: GDP growth, inflation, govt debt, current account — Africa focus."""
-    # Use ISO2 codes that IMF DataMapper accepts
-    countries = [
-        "DZ","AO","BJ","BW","BF","BI","CM","CV","CF","TD","KM","CG","CD","CI",
-        "DJ","GQ","ER","SZ","ET","GA","GM","GH","GN","GW","KE","LS","LR","LY",
-        "MG","MW","ML","MR","MU","MA","MZ","NA","NE","NG","RW","ST","SN","SL",
-        "SO","ZA","SS","SD","TZ","TG","TN","UG","ZM","ZW","EG",
-    ]
+    """
+    IMF WEO: GDP growth, inflation, govt debt, current account — all Africa.
+    Primary: SDMX 3.0 API (single batch call, forecasts included).
+    Fallback: DataMapper API (one call per indicator).
+    """
+    indicators = list(IMF_INDICATORS.values())   # ["NGDP_RPCH", "PCPIPCH", ...]
+    id_to_label = {v: k for k, v in IMF_INDICATORS.items()}
+
+    # ── 1. SDMX 3.0 batch ────────────────────────────────────────────────────
+    raw = _imf_sdmx(indicators, _IMF_AFRICA_ISO3)
+    if raw:
+        result = {id_to_label.get(k, k): v for k, v in raw.items()}
+        return result, "IMF WEO (SDMX 3.0)"
+
+    # ── 2. DataMapper fallback ────────────────────────────────────────────────
     result = {}
     for label, ind_id in IMF_INDICATORS.items():
-        df = _imf(ind_id, countries)
+        df = _imf_datamapper(ind_id, _IMF_AFRICA_ISO3)
         if df is not None:
             result[label] = df
     if result:
-        return result, "IMF DataMapper"
-    return None, "IMF DataMapper — FAILED"
+        return result, "IMF DataMapper (fallback)"
+    return None, "IMF — FAILED (SDMX 3.0 + DataMapper both failed)"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -473,48 +595,27 @@ def get_fao_food_price_index() -> tuple[pd.Series | None, str]:
 def get_oecd_cli() -> tuple[pd.DataFrame | None, str]:
     """
     OECD Composite Leading Indicators (amplitude-adjusted).
-    Free SDMX-JSON API — no key required.
+    Free SDMX CSV API — no key required.
+    Returns DataFrame(index=DatetimeIndex monthly, columns=country ISO2).
     """
     try:
-        r = requests.get(OECD_CLI_URL, timeout=_TIMEOUT + 10,
-                         headers={"Accept": "application/vnd.sdmx.data+json"})
+        from io import StringIO
+        r = requests.get(OECD_CLI_URL, timeout=_TIMEOUT + 10)
         r.raise_for_status()
-        payload = r.json()
+        raw = pd.read_csv(StringIO(r.text))
+        if raw.empty or "OBS_VALUE" not in raw.columns:
+            return None, "OECD CLI — FAILED (empty CSV)"
 
-        # Parse SDMX-JSON structure
-        ds = payload["data"]["dataSets"][0]["series"]
-        structure = payload["data"]["structure"]
-        dims = structure["dimensions"]["series"]
+        raw = raw[["REF_AREA", "TIME_PERIOD", "OBS_VALUE"]].dropna(subset=["OBS_VALUE"])
+        raw["date"] = pd.to_datetime(raw["TIME_PERIOD"] + "-01", errors="coerce")
+        raw = raw.dropna(subset=["date"])
+        raw["OBS_VALUE"] = pd.to_numeric(raw["OBS_VALUE"], errors="coerce")
+        raw = raw.dropna(subset=["OBS_VALUE"])
 
-        # Find country dimension index
-        country_dim = next(d for d in dims if d["id"] == "REF_AREA")
-        country_idx = dims.index(country_dim)
-        country_values = [v["id"] for v in country_dim["values"]]
-
-        # Time periods
-        time_dim = structure["dimensions"]["observation"][0]
-        periods = [v["id"] for v in time_dim["values"]]
-        dates = pd.to_datetime([p + "-01" for p in periods])
-
-        result = {}
-        for key_str, series_data in ds.items():
-            keys = key_str.split(":")
-            if len(keys) <= country_idx:
-                continue
-            c_idx = int(keys[country_idx])
-            if c_idx >= len(country_values):
-                continue
-            country = country_values[c_idx]
-            obs = series_data.get("observations", {})
-            vals = {int(t): obs[t][0] for t in obs if obs[t][0] is not None}
-            if not vals:
-                continue
-            s = pd.Series({dates[t]: v for t, v in vals.items() if t < len(dates)})
-            result[country] = s
-
-        if not result:
-            return None, "OECD CLI — FAILED (no series)"
-        df = pd.DataFrame(result).sort_index()
+        df = raw.pivot_table(index="date", columns="REF_AREA", values="OBS_VALUE", aggfunc="last")
+        df = df.sort_index()
+        if df.empty:
+            return None, "OECD CLI — FAILED (no data after pivot)"
         return df, "OECD"
     except Exception as e:
         return None, f"OECD CLI — FAILED ({type(e).__name__})"

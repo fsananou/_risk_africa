@@ -118,7 +118,8 @@ WB_EM_BROAD = ["NGA","ZAF","KEN","EGY","GHA","BRA","MEX","IND","IDN","CHN",
                "TUR","ZMB","ARG","CHL","VNM"]
 
 # ── IMF ───────────────────────────────────────────────────────────────────────
-IMF_BASE = "https://www.imf.org/external/datamapper/api/v1"
+IMF_BASE      = "https://www.imf.org/external/datamapper/api/v1"   # fallback
+IMF_SDMX_BASE = "https://api.imf.org/external/sdmx/3.0"
 IMF_INDICATORS = {
     "gdp_growth": "NGDP_RPCH",     # Real GDP growth %
     "inflation":  "PCPIPCH",       # CPI inflation %
@@ -140,12 +141,12 @@ FAO_FPI_URL = (
     "&show_codes=true&show_unit=true&null_values=false&lang=en"
 )
 
-# ── OECD CLI (free SDMX API) ──────────────────────────────────────────────────
+# ── OECD CLI (free SDMX API, CSV format) ─────────────────────────────────────
 OECD_CLI_URL = (
     "https://sdmx.oecd.org/public/rest/data/"
-    "OECD.SDD.STES,DSD_STES@DF_CLI,4.0/"
-    "OECDALL+USA+DEU+GBR+JPN+CHN+IND+BRA+ZAF.M.LI.AA.ST"
-    "?startPeriod=2018-01&format=jsondata"
+    "OECD.SDD.STES,DSD_STES@DF_CLI/"
+    ".M.LI...AA...H"
+    "?startPeriod=2018-01&dimensionAtObservation=AllDimensions&format=csvfilewithlabels"
 )
 
 # ── Placeholder registry ───────────────────────────────────────────────────────
