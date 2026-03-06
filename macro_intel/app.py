@@ -140,19 +140,6 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.caption("**API Keys** (free — improves data coverage)")
-    fred_key = st.text_input("FRED API Key", value="", type="password",
-                              placeholder="fred.stlouisfed.org (free)",
-                              label_visibility="collapsed")
-    eia_key  = st.text_input("EIA API Key",  value="", type="password",
-                              placeholder="eia.gov/opendata (free)",
-                              label_visibility="collapsed")
-    if fred_key:
-        import os; os.environ["FRED_API_KEY"] = fred_key
-    if eia_key:
-        import os; os.environ["EIA_API_KEY"]  = eia_key
-
-    st.divider()
     show_inference   = st.toggle("Forward-Looking Inference",   value=True)
     show_narrative   = st.toggle("Weekly Narrative Note",       value=True)
     show_sector_deps = st.toggle("Sector Dependency Map",       value=True)
@@ -168,21 +155,25 @@ with st.sidebar:
     st.caption("Real data: FRED · EIA · AGSI+ · FAO · World Bank · IMF · OECD · Yahoo Finance")
 
 
+# ── Resolve keys once (from secrets.toml → env var) ──────────────────────────
+_FRED_KEY = cfg.get_fred_key() or ""
+_EIA_KEY  = cfg.get_eia_key()  or ""
+
 # ── Data loading with source tracking ─────────────────────────────────────────
 @st.cache_data(ttl=900,   show_spinner=False)
-def load_market():    return df_mod.get_market_data()
+def load_market():              return df_mod.get_market_data()
 
 @st.cache_data(ttl=3600,  show_spinner=False)
-def load_yields():    return df_mod.get_yields()
+def load_yields(fk: str):       return df_mod.get_yields()
 
 @st.cache_data(ttl=3600,  show_spinner=False)
-def load_fred():      return df_mod.get_fred_macro()
+def load_fred(fk: str):         return df_mod.get_fred_macro()
 
 @st.cache_data(ttl=3600,  show_spinner=False)
-def load_eia_oil():   return df_mod.get_eia_oil_inventories()
+def load_eia_oil(ek: str):      return df_mod.get_eia_oil_inventories()
 
 @st.cache_data(ttl=3600,  show_spinner=False)
-def load_eia_gas():   return df_mod.get_eia_gas_storage_us()
+def load_eia_gas(ek: str):      return df_mod.get_eia_gas_storage_us()
 
 @st.cache_data(ttl=3600,  show_spinner=False)
 def load_eu_gas():    return df_mod.get_eu_gas_storage()
@@ -218,10 +209,10 @@ def load_gpr():       return df_mod.get_gpr_index()
 
 with st.spinner("Loading real-world data…"):
     mkt,      mkt_src  = load_market()
-    yields,   yld_src  = load_yields()
-    fred,     fred_src = load_fred()
-    oil_inv,  eia_o_src= load_eia_oil()
-    us_gas,   eia_g_src= load_eia_gas()
+    yields,   yld_src  = load_yields(_FRED_KEY)
+    fred,     fred_src = load_fred(_FRED_KEY)
+    oil_inv,  eia_o_src= load_eia_oil(_EIA_KEY)
+    us_gas,   eia_g_src= load_eia_gas(_EIA_KEY)
     eu_gas,   agsi_src = load_eu_gas()
     fao_fpi,  fao_src  = load_fao()
     fx_res,   wb_r_src = load_wb_res()
