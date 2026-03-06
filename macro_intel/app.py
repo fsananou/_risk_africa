@@ -32,6 +32,7 @@ import data_fetchers as df_mod
 import indicators as ind_mod
 import inference_engine as inf_eng
 import narrative_generator as narr
+import note_generator as note_gen
 import rules_engine as rules_eng
 import sector_dependencies as sec_dep
 
@@ -199,6 +200,9 @@ def load_shipping():  return df_mod.get_shipping_rates()
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_embi():      return df_mod.get_embi_spreads()
 
+@st.cache_data(ttl=3600,  show_spinner=False)
+def load_gpr():       return df_mod.get_gpr_index()
+
 
 with st.spinner("Loading real-world data…"):
     mkt,      mkt_src  = load_market()
@@ -215,13 +219,14 @@ with st.spinner("Loading real-world data…"):
     oecd_cli, oecd_src = load_oecd()
     _,        ship_src = load_shipping()
     _,        embi_src = load_embi()
+    gpr_data, gpr_src  = load_gpr()
 
 ALL_SOURCES = {
     "Market": mkt_src, "Yields": yld_src, "FRED": fred_src,
     "EIA Oil": eia_o_src, "EIA Gas": eia_g_src, "AGSI+": agsi_src,
     "FAO": fao_src, "WB Reserves": wb_r_src, "WB FDI": wb_f_src,
     "WB Debt": wb_d_src, "IMF": imf_src, "OECD": oecd_src,
-    "Shipping": ship_src, "EMBI": embi_src,
+    "Shipping": ship_src, "EMBI": embi_src, "GPR": gpr_src,
 }
 
 # Compute
@@ -231,11 +236,13 @@ ind = ind_mod.compute_all(
     fx_reserves=fx_res, fdi=fdi, ext_debt=ext_debt, oecd_cli=oecd_cli,
 )
 
-rules      = rules_eng.run(ind)
-inferences = inf_eng.run(ind, rules)
-sectors    = sec_dep.assess_sectors(ind)
+rules        = rules_eng.run(ind)
+inferences   = inf_eng.run(ind, rules)
+sectors      = sec_dep.assess_sectors(ind)
 propagations = sec_dep.run(ind)
-note       = narr.generate(ind, rules, inferences, propagations, sectors)
+note         = narr.generate(ind, rules, inferences, propagations, sectors)
+daily        = note_gen.daily_note(ind, rules, inferences, propagations, sectors)
+hourly       = note_gen.hourly_note(ind, rules, inferences)
 
 last_updated = datetime.datetime.now().strftime("%Y-%m-%d %H:%M UTC")
 
@@ -289,6 +296,8 @@ tabs = st.tabs([
     "⚡ 7. Sectors",
     "🔗 8. Sector Dependencies",
     "📰 9. Weekly Note",
+    "📋 10. Daily Note",
+    "⏱️ 11. Hourly Note",
 ])
 
 
@@ -491,9 +500,36 @@ with tabs[2]:
         else:
             _placeholder_box("OECD CLI", oecd_src)
 
+    # GPR — real if CSV available, else placeholder
+    st.divider()
+    st.markdown("**Geopolitical Risk Index — Caldara & Iacoviello (GPR)**")
+    if gpr_data is not None and not gpr_data.empty:
+        gpr_last  = float(gpr_data.dropna().iloc[-1])
+        gpr_avg5y = float(gpr_data.iloc[-min(len(gpr_data), 60):].mean())
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=gpr_data.index, y=gpr_data,
+                                 name="GPR", line=dict(color="#8e44ad")))
+        fig.add_hline(y=gpr_avg5y, line_dash="dot", line_color="#7f8c8d",
+                      annotation_text="Recent avg")
+        fig.update_layout(
+            title=f"Geopolitical Risk Index — {gpr_src} | Latest: {gpr_last:.0f}",
+            yaxis_title="GPR Index", height=260,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(f"Source: {gpr_src}")
+    else:
+        _placeholder_box("GPR — Caldara & Iacoviello", gpr_src)
+        st.caption(
+            "To activate: download `gpr_daily.csv` from "
+            "[matteoiacoviello.com/gpr.htm](https://www.matteoiacoviello.com/gpr.htm) "
+            "and place it in `macro_intel/data/`"
+        )
+
     st.divider()
     st.markdown("**Placeholders — Real-time API unavailable**")
     for key, meta in cfg.PLACEHOLDERS.items():
+        if key == "gpr_index":
+            continue   # Already handled above
         _placeholder_box(meta["name"], meta["reason"] + " | " + meta.get("alt",""))
 
 
@@ -868,7 +904,7 @@ with tabs[7]:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 9 — WEEKLY NOTE
 # ══════════════════════════════════════════════════════════════════════════════
-with tabs[8]:
+with tabs[8]:  # noqa: E741 — index 8 = tab 9
     st.subheader(f"Weekly Macro Briefing — {note['as_of']}")
 
     if not show_narrative:
@@ -899,3 +935,84 @@ with tabs[8]:
             mime="text/markdown",
             use_container_width=True,
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 10 — DAILY NOTE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_note_section(sec: dict) -> None:
+    """Render a note_generator section inside Streamlit."""
+    level_css = {
+        "alert":   ("insight-alert",   "🔴"),
+        "warning": ("insight-warning",  "🟠"),
+        "good":    ("insight-info",     "🟢"),
+        "info":    ("insight-info",     "🔵"),
+    }
+    css, icon = level_css.get(sec.get("level", "info"), ("insight-info", "⚪"))
+    with st.expander(f"{icon} **{sec['title']}**", expanded=True):
+        for row in sec.get("rows", []):
+            if not row.strip():
+                st.write("")
+            elif row.startswith("⚫") or "PLACEHOLDER" in row.upper():
+                st.markdown(
+                    f'<div class="placeholder-box" style="margin:2px 0;font-size:0.82rem;">{row}</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(f'<div class="{css}" style="padding:4px 10px;margin:2px 0;">{row}</div>',
+                            unsafe_allow_html=True)
+
+
+with tabs[9]:
+    st.subheader(f"Daily Intelligence Note — {daily['as_of']}")
+    st.caption("9-section intelligence briefing | Real data only | PLACEHOLDERs labelled")
+
+    regime_key = daily.get("regime", "benign")
+    st.markdown(_regime_html(regime_key), unsafe_allow_html=True)
+    st.markdown(f"**{daily['headline']}**")
+    st.divider()
+
+    for sec in daily.get("sections", []):
+        _render_note_section(sec)
+
+    st.divider()
+    st.caption(daily.get("footer", ""))
+
+    txt = note_gen.to_text(daily)
+    st.download_button(
+        label="📥 Download Daily Note (text)",
+        data=txt.encode("utf-8"),
+        file_name=f"daily_note_{datetime.date.today().isoformat()}.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 11 — HOURLY NOTE
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tabs[10]:
+    st.subheader(f"Hourly Macro Snapshot — {hourly['as_of']}")
+    st.caption("Condensed 4-section real-time snapshot | Refreshes on page reload")
+
+    regime_key_h = hourly.get("regime", "benign")
+    st.markdown(_regime_html(regime_key_h), unsafe_allow_html=True)
+    st.markdown(f"**{hourly['headline']}**")
+    st.divider()
+
+    for sec in hourly.get("sections", []):
+        _render_note_section(sec)
+
+    st.divider()
+    st.caption(hourly.get("footer", ""))
+
+    txt_h = note_gen.to_text(hourly)
+    st.download_button(
+        label="📥 Download Hourly Snapshot (text)",
+        data=txt_h.encode("utf-8"),
+        file_name=f"hourly_note_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )

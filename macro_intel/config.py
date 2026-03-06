@@ -191,9 +191,10 @@ THRESH = {
     "breakeven_normal": 2.0,"breakeven_high": 2.8,   "breakeven_very_high": 3.5,
     "nfci_normal": 0.0,     "nfci_tight": 0.5,       "nfci_crisis": 1.5,
     # Sector
-    "eu_gas_storage_low":   40.0,   # % full → stress
-    "eu_gas_storage_crisis":20.0,   # % full → crisis
-    "us_oil_inv_dev_stress":-0.05,  # -5% vs 5Y avg
+    "eu_gas_storage_low":    40.0,  # % full → stress
+    "eu_gas_storage_crisis": 20.0,  # % full → crisis
+    "eu_gas_storage_high":   80.0,  # % full → comfortable
+    "us_oil_inv_dev_stress": -0.05, # -5% vs 5Y avg
     "fao_fpi_stress":       130,
     "fao_fpi_crisis":       160,
     "indpro_recession":     -2.0,   # YoY % → recession signal

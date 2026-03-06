@@ -562,14 +562,74 @@ def get_lme_inventories() -> tuple[None, str]:
     return None, "PLACEHOLDER — LME Data (subscription required)"
 
 
-def get_gpr_index() -> tuple[None, str]:
+def get_gpr_index() -> tuple[pd.Series | None, str]:
     """
-    PLACEHOLDER — Geopolitical Risk Index (Caldara & Iacoviello 2022).
-    Available as manual download only; no live REST API.
-    To use: download gpr_daily.csv from matteoiacoviello.com/gpr.htm
-    and place in macro_intel/data/ — then implement a local reader here.
+    Geopolitical Risk Index — Caldara & Iacoviello (2022).
+
+    Attempt order:
+    1. Local CSV: macro_intel/data/gpr_daily.csv  (download from matteoiacoviello.com/gpr.htm)
+    2. Remote CSV: public GitHub mirror maintained by the authors.
+    3. PLACEHOLDER — returns (None, "PLACEHOLDER...").
+
+    CSV expected columns: DATE (or 'date'), GPRD_ALL (or 'gpr_daily').
+    Source label: "Caldara & Iacoviello (GPR)".
     """
-    return None, "PLACEHOLDER — Caldara & Iacoviello GPR (download CSV manually)"
+    import os
+    import pathlib
+
+    # ── 1. Try local file first ────────────────────────────────────────────────
+    local_paths = [
+        pathlib.Path(__file__).parent / "data" / "gpr_daily.csv",
+        pathlib.Path(__file__).parent / "data" / "gpr_monthly.csv",
+    ]
+    for path in local_paths:
+        if path.exists():
+            try:
+                df = pd.read_csv(path)
+                # Normalise column names
+                df.columns = [c.strip().lower() for c in df.columns]
+                date_col = next((c for c in df.columns if "date" in c), None)
+                val_col  = next((c for c in df.columns
+                                 if "gprd_all" in c or "gpr" in c or "gprc" in c), None)
+                if date_col and val_col:
+                    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+                    df[val_col]  = pd.to_numeric(df[val_col], errors="coerce")
+                    s = df.dropna(subset=[date_col, val_col]).set_index(date_col)[val_col].sort_index()
+                    if len(s) > 10:
+                        return s, "Caldara & Iacoviello (GPR) — local CSV"
+            except Exception:
+                pass
+
+    # ── 2. Try remote public CSV (Harvard Dataverse mirror) ───────────────────
+    remote_urls = [
+        # Direct download from matteoiacoviello.com (may not allow direct HTTP fetch)
+        "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls",
+        # Alternative: try fetching CSV from known public mirror on GitHub
+        "https://raw.githubusercontent.com/pjpmarques/World-Modeling-Datasets/master/GPR/gpr_daily.csv",
+    ]
+    for url in remote_urls:
+        try:
+            df = pd.read_csv(url, on_bad_lines="skip")
+            df.columns = [c.strip().lower() for c in df.columns]
+            date_col = next((c for c in df.columns if "date" in c), None)
+            val_col  = next((c for c in df.columns
+                             if "gprd" in c or "gpr" in c), None)
+            if date_col and val_col:
+                df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+                df[val_col]  = pd.to_numeric(df[val_col], errors="coerce")
+                s = df.dropna(subset=[date_col, val_col]).set_index(date_col)[val_col].sort_index()
+                if len(s) > 10:
+                    return s, "Caldara & Iacoviello (GPR) — remote CSV"
+        except Exception:
+            pass
+
+    # ── 3. Fallback: PLACEHOLDER ───────────────────────────────────────────────
+    return (
+        None,
+        "PLACEHOLDER — Caldara & Iacoviello GPR: "
+        "download gpr_daily.csv from matteoiacoviello.com/gpr.htm "
+        "and place in macro_intel/data/ to activate"
+    )
 
 
 def get_lithium_prices() -> tuple[None, str]:
